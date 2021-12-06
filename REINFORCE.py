@@ -11,14 +11,25 @@ import utils.seed
 import utils.torch
 
 import warnings
+
 warnings.filterwarnings("ignore")
 
 
-# Deep Q Learning
-# Slide 14
-# cs.uwaterloo.ca/~ppoupart/teaching/cs885-spring20/slides/cs885-lecture4b.pdf
-
 class REINFORCE(torch.nn.Module):
+    """
+    CS885 Fall 2021 - Reinforcement Learning
+    https://cs.uwaterloo.ca/~ppoupart/teaching/cs885-fall21/schedule.html
+
+    - MODE = hard: REINFORCE Algorithm (Vanilla Policy Gradient)
+      Slides 10
+      https://cs.uwaterloo.ca/~ppoupart/teaching/cs885-fall21/slides/cs885-lecture7a.pdf
+      https://spinningup.openai.com/en/latest/algorithms/vpg.html
+    - MODE = soft: Soft REINFORCE (pure PyTroch)
+      Sergey Levine. Reinforcement learning and control as probabilistic inference: Tutorial and review.
+      CoRR, abs/1805.00909, 2018. URL http://arxiv.org/abs/1805.00909.
+    - MODE = pyro: Soft REINFORCE (pure Pyro)
+    """
+
     def __init__(
             self,
             MODE,
@@ -64,21 +75,24 @@ class REINFORCE(torch.nn.Module):
     @property
     def SVI_ON(self):
         return self.MODE == "pyro"
+
     @property
     def SOFT_ON(self):
         return self.MODE == "pyro" or self.MODE == "soft"
+
     @property
     def SOFT_OFF(self):
         return self.MODE == "hard"
+
     def create_everything(self, seed):
         utils.seed.seed(seed)
         env = gym.make(self.ENV_NAME)
         env.seed(seed)
         test_env = gym.make(self.ENV_NAME)
-        test_env.seed(10+seed)
+        test_env.seed(10 + seed)
 
-        assert (isinstance(env.action_space,gym.spaces.discrete.Discrete))
-        assert (isinstance(env.observation_space,gym.spaces.box.Box))
+        assert (isinstance(env.action_space, gym.spaces.discrete.Discrete))
+        assert (isinstance(env.observation_space, gym.spaces.box.Box))
         self.OBS_N = env.observation_space.shape[0]
         self.ACT_N = env.action_space.n
         self.unif = torch.ones(self.ACT_N) / self.ACT_N
@@ -91,14 +105,14 @@ class REINFORCE(torch.nn.Module):
         ).to(self.DEVICE)
 
         if self.SVI_ON:
-            adma = pyro.optim.Adam({"lr":self.LEARNING_RATE})
+            adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
             OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
         else:
-            OPT = torch.optim.Adam(self.pi.parameters(), lr = self.LEARNING_RATE)
+            OPT = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
 
         return env, test_env, self.pi, OPT
 
-    def guide(self, env = None):
+    def guide(self, env=None):
         pyro.module("agentmodel", self)
         time_stamp = 0
         states, total_reward = [], 0
@@ -116,7 +130,7 @@ class REINFORCE(torch.nn.Module):
         states.append(obs)
         self.traj = (states, total_reward)
 
-    def model(self, env = None):
+    def model(self, env=None):
         S, total_reward = self.traj
         for idx, state in enumerate(S[:-1]):
             action = pyro.sample(
@@ -125,6 +139,12 @@ class REINFORCE(torch.nn.Module):
             )
         pyro.factor("total_reward", total_reward / self.TEMPERATURE)
 
+    def policy(self, env, obs):
+        with torch.no_grad():
+            obs = self.t.f(obs).view(-1, self.OBS_N)  # Convert to torch tensor
+            action = torch.distributions.Categorical(self.pi(obs)).sample().item()
+        return action
+
     def train(self, seed):
 
         print("Seed=%d" % seed)
@@ -132,12 +152,6 @@ class REINFORCE(torch.nn.Module):
 
         if self.SVI_ON:
             pyro.clear_param_store()
-
-        def policy(env, obs):
-            with torch.no_grad():
-                obs = self.t.f(obs).view(-1, self.OBS_N)  # Convert to torch tensor
-                action = torch.distributions.Categorical(pi(obs)).sample().item()
-            return action
 
         trainRs = []
         last25Rs = []
@@ -150,13 +164,13 @@ class REINFORCE(torch.nn.Module):
             else:
                 # Play an episode and log episodic reward
 
-                S, A, R = utils.envs.play_episode_tensor(env, policy)
+                S, A, R = utils.envs.play_episode_tensor(env, self.policy)
 
                 nSteps = len(S)
 
                 if self.MODE == "soft":
                     with torch.no_grad():
-                        R -= self.TEMPERATURE * torch.log(pi(S[:-1]).gather(-1, A.view(-1,1))).squeeze()
+                        R -= self.TEMPERATURE * torch.log(pi(S[:-1]).gather(-1, A.view(-1, 1))).squeeze()
 
                 G = torch.zeros(nSteps)
                 G[-1] = R[-1]
@@ -164,14 +178,14 @@ class REINFORCE(torch.nn.Module):
                     G[step] = R[step] + self.GAMMA * G[step + 1]
 
                 adv = torch.tensor([(self.GAMMA ** step) * G[step] for step in range(nSteps - 1)])
-                loss = - adv * torch.log(pi(S[:-1]).gather(-1, A.view(-1,1))).squeeze()
+                loss = - adv * torch.log(pi(S[:-1]).gather(-1, A.view(-1, 1))).squeeze()
                 OPT.zero_grad()
                 loss.mean().backward()
                 OPT.step()
 
                 trainRs += [G[0]]
                 # Update progress bar
-            last25Rs += [sum(trainRs[-25:])/len(trainRs[-25:])]
+            last25Rs += [sum(trainRs[-25:]) / len(trainRs[-25:])]
             pbar.set_description("R25(%g)" % (last25Rs[-1]))
 
         # Close progress bar, environment
@@ -184,7 +198,8 @@ class REINFORCE(torch.nn.Module):
 
     def run(self, label=""):
         # Train for different seeds
-        filename = utils.common.safe_filename(f"REINFORCE-{self.MODE}{label}-{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
+        filename = utils.common.safe_filename(
+            f"REINFORCE-{self.MODE}{label}-{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
         curves = [self.train(seed) for seed in self.SEEDS]
         with open(f'{filename}.csv', 'w') as csv:
             numpy.savetxt(csv, numpy.asarray(curves), delimiter=',')
@@ -197,6 +212,7 @@ class REINFORCE(torch.nn.Module):
         plt.legend(loc='best')
         plt.savefig(f'{filename}.png')
         plt.show()
+
 
 if __name__ == "__main__":
     reinforece = REINFORCE(

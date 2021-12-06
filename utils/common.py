@@ -21,3 +21,8 @@ def plot_arrays(x, y, color, label):
     std = np.std(y, axis=0)
     plt.plot(x, mean, color=color, label=label)
     plt.fill_between(x, mean-std, mean+std, color=color, alpha=0.3)
+
+# Update a target network using a source network
+def update(target, source):
+    for tp, p in zip(target.parameters(), source.parameters()):
+        tp.data.copy_(p.data)

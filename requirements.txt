@@ -1,0 +1,6 @@
+pyro-ppl
+torch
+gym
+matplotlib
+numpy
+tqdm
