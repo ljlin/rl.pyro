@@ -104,7 +104,7 @@ class AC(torch.nn.Module):
         assert (self.SVI_ON == (SVI_EPOCHS is not None))
         self.SVI_EPOCHS = SVI_EPOCHS
 
-        self.AC_MODE = ["QAC", "VAC", "DQAC"][2]
+        self.AC_MODE = ["QAC", "VAC", "DQAC"][0]
 
 
     @property
@@ -265,13 +265,6 @@ class AC(torch.nn.Module):
                     torch.nn.functional.log_softmax(Qt(S).detach() / self.TEMPERATURE, dim=-1), pi(S)
                 )
             else:
-                # assert (self.MODE == "hard")
-                # adv = (
-                #     R + self.GAMMA * Q(S_prime).max(-1)[0] -
-                #     (pi(S) * Q(S)).sum(-1)
-                # ).detach()
-                # print(adv)
-                # adv = qvalues.detach()
                 if self.AC_MODE == "VAC":
                     loss_policy = - (
                         delta *
@@ -279,11 +272,19 @@ class AC(torch.nn.Module):
                         torch.log(pi(S).gather(-1, A.view(-1, 1))).squeeze()
                     ).mean()
                 elif self.AC_MODE == "QAC":
+                    # adv = (
+                    #     Q(S).gather(1, A.view(-1, 1)).squeeze() -
+                    #     (pi(S) * Q(S)).sum(-1)
+                    # )
                     loss_policy = - (
                         qvalues.detach() *
                         torch.log(pi(S).gather(-1, A.view(-1, 1))).squeeze()
                     ).mean()
                 elif self.AC_MODE == "DQAC":
+                    # adv = (
+                    #     Qt(S).gather(1, A.view(-1, 1)).squeeze() -
+                    #      (pi(S) * Q(S)).sum(-1)
+                    # ).detach()
                     loss_policy = - (
                         Qt(S).gather(1, A.view(-1, 1)).squeeze().detach() *
                         torch.log(pi(S).gather(-1, A.view(-1, 1))).squeeze()
