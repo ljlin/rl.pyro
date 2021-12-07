@@ -47,7 +47,9 @@ class REINFORCE(torch.nn.Module):
             # Randoms seeds for mutiple trails
             EPISODES=300 * 25,
             # Total number of episodes to learn over
-            TEMPERATURE=None
+            TEMPERATURE=None,
+            UNIF_PRIOR = None,
+            SVI_NUM_SAMPLES = None,
     ):
         super().__init__()
         self.t = utils.torch.TorchHelper()
@@ -68,9 +70,15 @@ class REINFORCE(torch.nn.Module):
             self.EPISODES = EPISODES
 
         assert (self.SOFT_OFF != self.SOFT_ON)
-        assert (self.SOFT_ON <= (TEMPERATURE != None))
-        assert (self.SOFT_OFF <= (TEMPERATURE == None))
+        assert (self.SOFT_ON <= (TEMPERATURE is not None))
+        assert (self.SOFT_OFF <= (TEMPERATURE is None))
         self.TEMPERATURE = TEMPERATURE
+
+        assert ((UNIF_PRIOR is not None) <= self.SVI_ON)
+        self.UNIF_PRIOR = UNIF_PRIOR
+
+        assert ((SVI_NUM_SAMPLES is not None) <= self.SVI_ON)
+        self.SVI_NUM_SAMPLES = SVI_NUM_SAMPLES
 
     @property
     def SVI_ON(self):
@@ -105,8 +113,12 @@ class REINFORCE(torch.nn.Module):
         ).to(self.DEVICE)
 
         if self.SVI_ON:
+            self.prior = self.unif_prior if self.UNIF_PRIOR else self.pi_prior
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
-            OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
+            if not self.SVI_NUM_SAMPLES is None:
+                OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
+            else:
+                OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO(), num_samples=self.SVI_NUM_SAMPLES)
         else:
             OPT = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
 
@@ -116,26 +128,33 @@ class REINFORCE(torch.nn.Module):
         pyro.module("agentmodel", self)
         time_stamp = 0
         states, total_reward = [], 0
-        obs = env.reset()
+        obs = self.t.f(env.reset())
         done = False
         while not done:
             states.append(obs)
             action = pyro.sample(
                 "action_{}".format(time_stamp),
-                pyro.distributions.Categorical(self.pi(self.t.f(obs)))
+                pyro.distributions.Categorical(self.pi(obs))
             ).item()
             obs, reward, done, info = env.step(action)
+            obs = self.t.f(obs)
             total_reward += reward
             time_stamp += 1
         states.append(obs)
         self.traj = (states, total_reward)
+
+    def pi_prior(self, state):
+        return self.pi(state)
+
+    def unif_prior(self, state):
+        return self.unif
 
     def model(self, env=None):
         S, total_reward = self.traj
         for idx, state in enumerate(S[:-1]):
             action = pyro.sample(
                 "action_{}".format(idx),
-                pyro.distributions.Categorical(self.unif)
+                pyro.distributions.Categorical(self.prior(state))
             )
         pyro.factor("total_reward", total_reward / self.TEMPERATURE)
 
@@ -213,9 +232,11 @@ class REINFORCE(torch.nn.Module):
 
 if __name__ == "__main__":
     reinforece = REINFORCE(
-        "hard",
-        SMOKE_TEST=True
-        # TEMPERATURE=1
+        "pyro",
+        SMOKE_TEST=True,
+        SVI_NUM_SAMPLES=10,
+        TEMPERATURE=1,
+        UNIF_PRIOR=False
         # SEEDS=[1,2],
         # EPISODES=50
     )

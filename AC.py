@@ -62,7 +62,8 @@ class AC(torch.nn.Module):
             # Test episodes after every train episode
             TARGET_UPDATE_FREQ=10,
             # Target network update frequency
-            SVI_EPOCHS=None
+            SVI_EPOCHS=None,
+            SVI_NUM_SAMPLES=None
     ):
         super().__init__()
         self.t = utils.torch.TorchHelper()
@@ -91,12 +92,12 @@ class AC(torch.nn.Module):
         self.TEST_EPISODES = TEST_EPISODES
 
         assert (self.SOFT_OFF != self.SOFT_ON)
-        assert (self.SVI_OFF != self.SVI_ON)
-        assert (self.SOFT_ON <= (TEMPERATURE != None))
-        assert (self.SOFT_OFF <= (TEMPERATURE == None))
-        assert (self.SVI_ON <= (isinstance(SVI_EPOCHS, int)))
+        assert (self.SOFT_ON <= (TEMPERATURE is not None))
+        assert (self.SOFT_OFF <= (TEMPERATURE is None))
         self.TEMPERATURE = TEMPERATURE
-        self.SVI_EPOCHS = SVI_EPOCHS
+
+        assert (SVI_NUM_SAMPLES is not None <= self.SVI_ON)
+        self.SVI_NUM_SAMPLES = SVI_NUM_SAMPLES
 
     @property
     def SVI_ON(self):
@@ -140,7 +141,10 @@ class AC(torch.nn.Module):
 
         if self.SVI_ON:
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
-            OPT_pi = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
+            if not self.SVI_NUM_SAMPLES is None:
+                OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
+            else:
+                OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO(), num_samples=self.SVI_NUM_SAMPLES)
         else:
             OPT_pi = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
 
