@@ -195,7 +195,7 @@ class REINFORCE(torch.nn.Module):
                 loss.mean().backward()
                 OPT.step()
 
-                trainRs += [G[0]]
+                trainRs += [sum(R)]
                 # Update progress bar
             last25Rs += [sum(trainRs[-25:]) / len(trainRs[-25:])]
             pbar.set_description("R25(%g)" % (last25Rs[-1]))
