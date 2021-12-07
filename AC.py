@@ -15,6 +15,15 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+class Clamp(torch.nn.Module):
+    def __init__(self, max, min):
+        super().__init__()
+        self.max = max
+        self.min = min
+
+    def forward(self, input):
+        # print(input)
+        return torch.clamp(input, max=self.max, min = self.min)
 
 class AC(torch.nn.Module):
     """
@@ -104,7 +113,7 @@ class AC(torch.nn.Module):
         assert (self.SVI_ON == (SVI_EPOCHS is not None))
         self.SVI_EPOCHS = SVI_EPOCHS
 
-        self.AC_MODE = ["QAC", "VAC", "DQAC"][0]
+        self.AC_MODE = ["QAC", "VAC", "DQAC"][-1]
 
 
     @property
@@ -140,11 +149,13 @@ class AC(torch.nn.Module):
         self.ACT_N = env.action_space.n
         self.unif = torch.ones(self.MINIBATCH_SIZE, self.ACT_N) / self.ACT_N
 
-        self.pi = torch.nn.Sequential(
+        self.log_pi = torch.nn.Sequential(
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.ACT_N),
-            torch.nn.Softmax(dim=-1)
+            # Clamp(max = 10, min = -10),
+            # torch.nn.Softmax(dim=-1)
+            torch.nn.LogSoftmax(dim=-1)
         ).to(self.DEVICE)
 
         buf = utils.buffers.ReplayBuffer(self.BUFSIZE)
@@ -153,7 +164,7 @@ class AC(torch.nn.Module):
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
             OPT_pi = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
         else:
-            OPT_pi = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
+            OPT_pi = torch.optim.Adam(self.log_pi.parameters(), lr=self.LEARNING_RATE)
 
         if self.SOFT_ON or self.AC_MODE == "DQAC":
             self.Q = torch.nn.Sequential(
@@ -186,8 +197,12 @@ class AC(torch.nn.Module):
                 OPT = torch.optim.Adam(self.Q.parameters(), lr=self.LEARNING_RATE)
                 return env, test_env, buf, self.pi, OPT_pi, self.Q, None, None, OPT
 
+    def pi(self,input):
+        log_out = self.log_pi(input)
+        return torch.exp(log_out)
+
     def guide(self, states):
-        pyro.module("agent", self.pi)
+        pyro.module("agent", self.log_pi)
         with pyro.plate("state_batch", states.shape[0]):
             prob_action = self.pi(states)
             action = pyro.sample("action", pyro.distributions.Categorical(prob_action))
@@ -281,13 +296,15 @@ class AC(torch.nn.Module):
                         torch.log(pi(S).gather(-1, A.view(-1, 1))).squeeze()
                     ).mean()
                 elif self.AC_MODE == "DQAC":
-                    # adv = (
-                    #     Qt(S).gather(1, A.view(-1, 1)).squeeze() -
-                    #      (pi(S) * Q(S)).sum(-1)
-                    # ).detach()
+                    adv = (
+                        R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (pi(S) * Qt(S)).sum(-1) #slides
+                        # (R + self.GAMMA * Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()) - Qt(S).gather(1, A.view(-1, 1)).squeeze() #?
+                        # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - Qt(S).gather(1, A.view(-1, 1)).squeeze()
+                        # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - (pi(S) * Qt(S)).sum(-1)
+                    ).detach()
                     loss_policy = - (
-                        Qt(S).gather(1, A.view(-1, 1)).squeeze().detach() *
-                        torch.log(pi(S).gather(-1, A.view(-1, 1))).squeeze()
+                        adv *
+                        self.log_pi(S).gather(-1, A.view(-1, 1)).squeeze()
                     ).mean()
 
             OPT_Pi.zero_grad()
