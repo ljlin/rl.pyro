@@ -297,18 +297,19 @@ class AC(torch.nn.Module):
 
         return last25testRs
 
-    def run(self, label=""):
+    def run(self, info ="", SHOW = True):
         # Train for different seeds
         filename = utils.common.safe_filename(
-            f"AC-{self.MODE}{ '-' + label + '-' if label else '-'}{label}-{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
+            f"AC-{self.MODE}{ '-' + info + '-' if info else '-'}{info}-{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
         print(filename)
         utils.common.train_and_plot(
             self.train,
             self.SEEDS,
             filename,
-            label,
+            info,
             self.MODE,
-            range(self.EPISODES)
+            range(self.EPISODES),
+            SHOW
         )
 
 if __name__ == "__main__":

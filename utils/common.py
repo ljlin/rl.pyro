@@ -27,15 +27,15 @@ def update(target, source):
     for tp, p in zip(target.parameters(), source.parameters()):
         tp.data.copy_(p.data)
 
-def train_and_plot(train, SEEDS, filename, label, MODE, x):
+def train_and_plot(train, SEEDS, filename, info, MODE, x, show = False):
     curves = [train(seed) for seed in SEEDS]
     with open(f'{filename}.csv', 'w') as csv:
         numpy.savetxt(csv, numpy.asarray(curves), delimiter=',')
     # Plot the curve for the given seeds
     plt.figure(dpi=120)
-    if label:
-        label = MODE
+    label = f"{MODE}{'-' + info if info else ''}"
     plot_arrays(x, curves, 'b', label)
     plt.legend(loc='best')
     plt.savefig(f'{filename}.png')
-    plt.show()
+    if show:
+        plt.show()

@@ -208,18 +208,19 @@ class REINFORCE(torch.nn.Module):
 
         return last25Rs
 
-    def run(self, label=None):
+    def run(self, info=None, SHOW = True):
         # Train for different seeds
         filename = utils.common.safe_filename(
-            f"REINFORCE-{self.MODE}{ '-' + label + '-' if label else '-'}{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
+            f"REINFORCE-{self.MODE}{ '-' + info + '-' if info else '-'}{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
         print(filename)
         utils.common.train_and_plot(
             self.train,
             self.SEEDS,
             filename,
-            label,
+            info,
             self.MODE,
-            range(self.EPISODES)
+            range(self.EPISODES),
+            SHOW
         )
 
 
@@ -227,7 +228,6 @@ if __name__ == "__main__":
     reinforece = REINFORCE(
         "pyro",
         SMOKE_TEST=True,
-        SVI_NUM_SAMPLES=10,
         TEMPERATURE=1,
         UNIF_PRIOR=False
         # SEEDS=[1,2],
