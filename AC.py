@@ -37,6 +37,7 @@ class AC(torch.nn.Module):
     def __init__(
             self,
             MODE,
+            PRIOR=None,
             TEMPERATURE=None,
             SMOKE_TEST=False,
             ENV_NAME="CartPole-v0",
@@ -91,9 +92,17 @@ class AC(torch.nn.Module):
         self.TEST_EPISODES = TEST_EPISODES
 
         assert (self.SOFT_OFF != self.SOFT_ON)
-        assert (self.SOFT_ON <= (TEMPERATURE is not None))
-        assert (self.SOFT_OFF <= (TEMPERATURE is None))
+        assert (self.SOFT_ON == (TEMPERATURE is not None))
         self.TEMPERATURE = TEMPERATURE
+
+        assert (self.SVI_ON == (PRIOR is not None))
+        if self.SVI_ON:
+            model = getattr(self, f"model_{PRIOR}", None)
+            assert (model is not None)
+            self.model = model
+
+        assert (self.SVI_ON == (SVI_EPOCHS is not None))
+        self.SVI_EPOCHS = SVI_EPOCHS
 
     @property
     def SVI_ON(self):
@@ -126,7 +135,7 @@ class AC(torch.nn.Module):
         assert (isinstance(env.observation_space, gym.spaces.box.Box))
         self.OBS_N = env.observation_space.shape[0]
         self.ACT_N = env.action_space.n
-        self.unif = torch.ones(self.ACT_N) / self.ACT_N
+        self.unif = torch.ones(self.MINIBATCH_SIZE, self.ACT_N) / self.ACT_N
 
         self.pi = torch.nn.Sequential(
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
@@ -137,7 +146,7 @@ class AC(torch.nn.Module):
 
         if self.SVI_ON:
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
-            OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
+            OPT_pi = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
         else:
             OPT_pi = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
 
@@ -162,7 +171,13 @@ class AC(torch.nn.Module):
             prob_action = self.pi(states)
             action = pyro.sample("action", pyro.distributions.Categorical(prob_action))
 
-    def model(self, states):
+    def model_unif(self, states):
+        with pyro.plate("state_batch", states.shape[0]):
+            action = pyro.sample("action", pyro.distributions.Categorical(self.unif))
+            qvalues = self.Qt(states).detach().gather(1, action.view(-1, 1)).squeeze()
+            pyro.factor("reward", qvalues / self.TEMPERATURE)
+
+    def model_softmaxQ(self, states):
         with pyro.plate("state_batch", states.shape[0]):
             prob_action = torch.nn.Softmax()(self.Qt(states).detach() / self.TEMPERATURE)
             action = pyro.sample("action", pyro.distributions.Categorical(prob_action))
@@ -297,6 +312,15 @@ class AC(torch.nn.Module):
         )
 
 if __name__ == "__main__":
+    AC(
+        "pyro",
+        # SMOKE_TEST=True,
+        PRIOR="unif",
+        TEMPERATURE=1,
+        SVI_EPOCHS=1,
+        SEEDS=[1],
+        EPISODES=300
+    ).run()
     ac = AC(
         "hard",
         # SMOKE_TEST=True,
