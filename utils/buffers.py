@@ -10,17 +10,24 @@ class ReplayBuffer:
     def __init__(self, N):
         self.buf = collections.deque(maxlen = N)
     
-    # add: add a transition (s, a, r, s2, d)
-    def add(self, s, a, r, s2, d):
-        self.buf.append((s, a, r, s2, d))
+    # add: add a transition (s, a, r, s2, d) or (s, a, r, s2, d, n)
+    def add(self, *args):
+        self.buf.append(args)
     
     # sample: return minibatch of size n
     def sample(self, n, t):
         minibatch = random.sample(self.buf, n)
-        S, A, R, S2, D = [], [], [], [], []
+        batch = []
         
         for mb in minibatch:
-            s, a, r, s2, d = mb
-            S += [s]; A += [a]; R += [r]; S2 += [s2]; D += [d]
+            batch += [mb]
 
-        return t.f(S), t.l(A), t.f(R), t.f(S2), t.i(D)
+        res = [chk for chk in zip(*batch)]
+        if len(res) == 5:
+            S, A, R, S2, D = res
+            return t.f(S), t.l(A), t.f(R), t.f(S2), t.i(D)
+        elif len(res) == 6:
+            S, A, R, S2, D, N = res
+            return t.f(S), t.l(A), t.f(R), t.f(S2), t.i(D), t.i(N)
+        else:
+            assert (False)

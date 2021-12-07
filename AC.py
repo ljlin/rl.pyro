@@ -181,7 +181,7 @@ class AC(torch.nn.Module):
         with pyro.plate("state_batch", states.shape[0]):
             prob_action = torch.nn.functional.softmax(
                 self.Qt(states).detach() / self.TEMPERATURE,
-                dim = -1
+                dim=-1
             )
             action = pyro.sample("action", pyro.distributions.Categorical(prob_action))
 
@@ -189,43 +189,41 @@ class AC(torch.nn.Module):
     def update_networks(self, epi, buf, Q, Qt, Pi, OPT, OPTPi):
         # Sample a minibatch (s, a, r, s', d)
         # Each variable is a vector of corresponding values
-        S, A, R, S_prime, D = buf.sample(self.MINIBATCH_SIZE, self.t)
-        A_prime = torch.distributions.Categorical(Pi(S_prime)).sample()
+        if self.SOFT_ON:
+            S, A, R, S_prime, D = buf.sample(self.MINIBATCH_SIZE, self.t)
+            A_prime = torch.distributions.Categorical(Pi(S_prime)).sample()
+            # Get Qt(s', a') for every (s') in the minibatch
+            q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
+        else:
+            S, A, R, S_prime, D, N = buf.sample(self.MINIBATCH_SIZE, self.t)
+            # Get (max a. Qt(s', a)) for every (s') in the minibatch
+            q_prime_values = Qt(S_prime).max(-1)[0]
 
         # Get Q(s, a) for every (s, a) in the minibatch
         qvalues = Q(S).gather(1, A.view(-1, 1)).squeeze()
 
-        # Get Qt(s', a') for every (s') in the minibatch
-        q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
-
         # M Step
-        if self.SVI_OFF and self.SOFT_ON:
-            assert (self.MODE == 'soft')
-            entropy = torch.mean(torch.distributions.Categorical(Pi(S_prime)).entropy())
-            # If done,
-            #   y = r(s, a) + GAMMA * max_a' Q(s', a') * (0)
-            # If not done,
-            #   y = r(s, a) + GAMMA * max_a' Q(s', a') * (1)
-            targets = R + self.GAMMA * (q_prime_values + self.TEMPERATURE * entropy) * (1 - D)
-
-            # Detach y since it is the target. Target values should
-            # be kept fixed.
-            loss = torch.nn.MSELoss()(targets.detach(), qvalues)
-
-            # Backpropagation
-            OPT.zero_grad()
-            loss.backward()
-            OPT.step()
-        else:
-            assert (self.SVI_ON or self.SOFT_OFF)
-            assert (self.MODE == 'hard' or self.MODE == "pyro")
-
+        if self.SVI_ON:
             targets = R + self.GAMMA * q_prime_values * (1 - D)
-            loss = torch.nn.MSELoss()(targets.detach(), qvalues)
+            loss = torch.nn.functional.mse_loss(targets.detach(), qvalues)
+        elif self.SOFT_ON:
+            # assert (self.MODE == 'soft')
+            entropy = torch.mean(torch.distributions.Categorical(Pi(S_prime)).entropy())
+            targets = R + self.GAMMA * (q_prime_values + self.TEMPERATURE * entropy) * (1 - D)
+            loss = torch.nn.functional.mse_loss(targets.detach(), qvalues)
+        else:
+            delta = (R + self.GAMMA * Q(S_prime).max(-1)[0] - Q(S).gather(1, A.view(-1, 1)).squeeze()).detach()
+            loss = - (
+                delta *
+                torch.pow(self.GAMMA, N).detach() *
+                Q(S).gather(1, A.view(-1, 1)).squeeze()
+            ).mean()
+            # targets = R + self.GAMMA * q_prime_values * (1 - D)
+            # loss = torch.nn.functional.smooth_l1_loss(qvalues, targets.detach())
 
-            OPT.zero_grad()
-            loss.backward()
-            OPT.step()
+        OPT.zero_grad()
+        loss.backward()
+        OPT.step()
 
         # E Step
         if self.SVI_ON:
@@ -234,18 +232,26 @@ class AC(torch.nn.Module):
         else:
             if self.SOFT_ON:
                 loss_policy = torch.nn.KLDivLoss(reduction='batchmean')(
-                    torch.nn.LogSoftmax()(Qt(S).detach() / self.TEMPERATURE), Pi(S)
+                    torch.nn.functional.log_softmax(Qt(S).detach() / self.TEMPERATURE), Pi(S)
                 )
             else:
-                assert (self.MODE == "hard")
-                # adv = R + self.GAMMA * q_prime_values * (1 - D) - qvalues
-                adv = qvalues
-                loss_policy = -(adv.detach() * torch.log(Pi(S).gather(-1, A.view(-1, 1))).squeeze()).mean()
+                # assert (self.MODE == "hard")
+                adv = (
+                        R + self.GAMMA * Q(S_prime).max(-1)[0] -
+                        (Pi(S) * Q(S)).sum(-1)
+                ).detach()
+                print(adv)
+                # adv = qvalues.detach()
+                loss_policy = - (
+                    adv *
+                    torch.pow(self.GAMMA, N) *
+                    torch.log(Pi(S).gather(-1, A.view(-1, 1))).squeeze()
+                ).mean()
 
             OPTPi.zero_grad()
             loss_policy.backward()
             OPTPi.step()
-
+            # print(loss_policy.item())
         # Update target network every few steps
         if epi % self.TARGET_UPDATE_FREQ == 0:
             utils.common.update(Qt, Q)
@@ -273,7 +279,10 @@ class AC(torch.nn.Module):
         for epi in pbar:
 
             # Play an episode and log episodic reward
-            S, A, R = utils.envs.play_episode_rb(env, policy, buf)
+            if self.SOFT_ON:
+                S, A, R = utils.envs.play_episode_rb(env, policy, buf)
+            else:
+                S, A, R = utils.envs.play_episode_rb_with_steps(env,policy,buf)
 
             # Train after collecting sufficient experience
             if epi >= self.TRAIN_AFTER_EPISODES:
@@ -317,11 +326,19 @@ class AC(torch.nn.Module):
 
 if __name__ == "__main__":
     AC(
-        "pyro",
+        "hard",
         # SMOKE_TEST=True,
-        PRIOR="unif",
-        TEMPERATURE=1,
-        SVI_EPOCHS=1,
+        LEARNING_RATE=5e-5,
         SEEDS=[1],
         EPISODES=300
     ).run()
+
+    # AC(
+    #     "pyro",
+    #     # SMOKE_TEST=True,
+    #     PRIOR="unif",
+    #     TEMPERATURE=1,
+    #     SVI_EPOCHS=1,
+    #     SEEDS=[1],
+    #     EPISODES=300
+    # ).run()

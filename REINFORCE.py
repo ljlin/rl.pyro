@@ -189,7 +189,7 @@ class REINFORCE(torch.nn.Module):
                 for step in reversed(range(nSteps - 1)):
                     G[step] = R[step] + self.GAMMA * G[step + 1]
 
-                adv = torch.tensor([(self.GAMMA ** step) * G[step] for step in range(nSteps - 1)])
+                adv = torch.tensor([(self.GAMMA ** step) * G[step] for step in range(nSteps - 1)]).detach()
                 loss = - adv * torch.log(pi(S[:-1]).gather(-1, A.view(-1, 1))).squeeze()
                 OPT.zero_grad()
                 loss.mean().backward()

@@ -63,3 +63,18 @@ def play_episode_rb(env, policy, buf):
         states.append(obs)
         rewards.append(reward)
     return states, actions, rewards
+
+def play_episode_rb_with_steps(env, policy, buf):
+    states, actions, rewards = [], [], []
+    states.append(env.reset())
+    done = False
+    step = 0
+    while not done:
+        action = policy(env, states[-1])
+        actions.append(action)
+        obs, reward, done, info = env.step(action)
+        buf.add(states[-1], action, reward, obs, done, step)
+        step += 1
+        states.append(obs)
+        rewards.append(reward)
+    return states, actions, rewards
