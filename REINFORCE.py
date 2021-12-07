@@ -49,7 +49,6 @@ class REINFORCE(torch.nn.Module):
             # Total number of episodes to learn over
             TEMPERATURE=None,
             UNIF_PRIOR = None,
-            SVI_NUM_SAMPLES = None,
     ):
         super().__init__()
         self.t = utils.torch.TorchHelper()
@@ -76,9 +75,6 @@ class REINFORCE(torch.nn.Module):
 
         assert ((UNIF_PRIOR is not None) <= self.SVI_ON)
         self.UNIF_PRIOR = UNIF_PRIOR
-
-        assert ((SVI_NUM_SAMPLES is not None) <= self.SVI_ON)
-        self.SVI_NUM_SAMPLES = SVI_NUM_SAMPLES
 
     @property
     def SVI_ON(self):
@@ -115,10 +111,7 @@ class REINFORCE(torch.nn.Module):
         if self.SVI_ON:
             self.prior = self.unif_prior if self.UNIF_PRIOR else self.pi_prior
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
-            if not self.SVI_NUM_SAMPLES is None:
-                OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
-            else:
-                OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO(), num_samples=self.SVI_NUM_SAMPLES)
+            OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
         else:
             OPT = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
 

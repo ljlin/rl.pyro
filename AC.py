@@ -63,7 +63,6 @@ class AC(torch.nn.Module):
             TARGET_UPDATE_FREQ=10,
             # Target network update frequency
             SVI_EPOCHS=None,
-            SVI_NUM_SAMPLES=None
     ):
         super().__init__()
         self.t = utils.torch.TorchHelper()
@@ -95,9 +94,6 @@ class AC(torch.nn.Module):
         assert (self.SOFT_ON <= (TEMPERATURE is not None))
         assert (self.SOFT_OFF <= (TEMPERATURE is None))
         self.TEMPERATURE = TEMPERATURE
-
-        assert (SVI_NUM_SAMPLES is not None <= self.SVI_ON)
-        self.SVI_NUM_SAMPLES = SVI_NUM_SAMPLES
 
     @property
     def SVI_ON(self):
@@ -141,10 +137,7 @@ class AC(torch.nn.Module):
 
         if self.SVI_ON:
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
-            if not self.SVI_NUM_SAMPLES is None:
-                OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
-            else:
-                OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO(), num_samples=self.SVI_NUM_SAMPLES)
+            OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
         else:
             OPT_pi = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
 
