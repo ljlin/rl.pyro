@@ -141,7 +141,7 @@ class AC(torch.nn.Module):
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.ACT_N),
-            torch.nn.Softmax()
+            torch.nn.Softmax(dim=-1)
         ).to(self.DEVICE)
 
         if self.SVI_ON:
@@ -179,7 +179,10 @@ class AC(torch.nn.Module):
 
     def model_softmaxQ(self, states):
         with pyro.plate("state_batch", states.shape[0]):
-            prob_action = torch.nn.Softmax()(self.Qt(states).detach() / self.TEMPERATURE)
+            prob_action = torch.nn.functional.softmax(
+                self.Qt(states).detach() / self.TEMPERATURE,
+                dim = -1
+            )
             action = pyro.sample("action", pyro.distributions.Categorical(prob_action))
 
     # Update networks
@@ -322,12 +325,3 @@ if __name__ == "__main__":
         SEEDS=[1],
         EPISODES=300
     ).run()
-    ac = AC(
-        "hard",
-        # SMOKE_TEST=True,
-        # TEMPERATURE=1,
-        # SVI_EPOCHS=1,
-        SEEDS=[1],
-        EPISODES=300*10
-    )
-    ac.run("adv")

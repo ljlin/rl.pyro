@@ -105,7 +105,7 @@ class REINFORCE(torch.nn.Module):
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.ACT_N),
-            torch.nn.Softmax()
+            torch.nn.Softmax(dim=-1)
         ).to(self.DEVICE)
 
         if self.SVI_ON:
