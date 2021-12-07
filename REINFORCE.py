@@ -196,22 +196,19 @@ class REINFORCE(torch.nn.Module):
 
         return last25Rs
 
-    def run(self, label=""):
+    def run(self, label=None):
         # Train for different seeds
         filename = utils.common.safe_filename(
-            f"REINFORCE-{self.MODE}{label}-{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
-        curves = [self.train(seed) for seed in self.SEEDS]
-        with open(f'{filename}.csv', 'w') as csv:
-            numpy.savetxt(csv, numpy.asarray(curves), delimiter=',')
-        # Plot the curve for the given seeds
-        plt.figure(dpi=120)
-        x = range(self.EPISODES)
-        if label == None:
-            label = self.MODE
-        utils.common.plot_arrays(x, curves, 'b', label)
-        plt.legend(loc='best')
-        plt.savefig(f'{filename}.png')
-        plt.show()
+            f"REINFORCE-{self.MODE}{ '-' + label + '-' if label else '-'}{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
+        print(filename)
+        utils.common.train_and_plot(
+            self.train,
+            self.SEEDS,
+            filename,
+            label,
+            self.MODE,
+            range(self.EPISODES)
+        )
 
 
 if __name__ == "__main__":

@@ -62,7 +62,7 @@ class AC(torch.nn.Module):
             # Test episodes after every train episode
             TARGET_UPDATE_FREQ=10,
             # Target network update frequency
-            SVI_EPOCHS = None
+            SVI_EPOCHS=None
     ):
         super().__init__()
         self.t = utils.torch.TorchHelper()
@@ -91,9 +91,10 @@ class AC(torch.nn.Module):
         self.TEST_EPISODES = TEST_EPISODES
 
         assert (self.SOFT_OFF != self.SOFT_ON)
+        assert (self.SVI_OFF != self.SVI_ON)
         assert (self.SOFT_ON <= (TEMPERATURE != None))
         assert (self.SOFT_OFF <= (TEMPERATURE == None))
-        assert (self.SVI_ON <= (isinstance(SVI_EPOCHS,int)))
+        assert (self.SVI_ON <= (isinstance(SVI_EPOCHS, int)))
         self.TEMPERATURE = TEMPERATURE
         self.SVI_EPOCHS = SVI_EPOCHS
 
@@ -102,12 +103,20 @@ class AC(torch.nn.Module):
         return self.MODE == "pyro"
 
     @property
+    def SVI_OFF(self):
+        res = self.MODE == "hard" or self.MODE == "soft"
+        assert (self.SVI_ON != res)
+        return res
+
+    @property
     def SOFT_ON(self):
         return self.MODE == "pyro" or self.MODE == "soft"
 
     @property
     def SOFT_OFF(self):
-        return self.MODE == "hard"
+        res = self.MODE == "hard"
+        assert (self.SOFT_ON != res)
+        return res
 
     def create_everything(self, seed):
         utils.seed.seed(seed)
@@ -174,34 +183,53 @@ class AC(torch.nn.Module):
         # Get Qt(s', a') for every (s') in the minibatch
         q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
 
-        entropy = torch.mean(torch.distributions.Categorical(Pi(S_prime)).entropy())
+        # M Step
+        if self.SVI_OFF and self.SOFT_ON:
+            assert (self.MODE == 'soft')
+            entropy = torch.mean(torch.distributions.Categorical(Pi(S_prime)).entropy())
+            # If done,
+            #   y = r(s, a) + GAMMA * max_a' Q(s', a') * (0)
+            # If not done,
+            #   y = r(s, a) + GAMMA * max_a' Q(s', a') * (1)
+            targets = R + self.GAMMA * (q_prime_values + self.TEMPERATURE * entropy) * (1 - D)
 
-        # If done,
-        #   y = r(s, a) + GAMMA * max_a' Q(s', a') * (0)
-        # If not done,
-        #   y = r(s, a) + GAMMA * max_a' Q(s', a') * (1)
-        targets = R + self.GAMMA * (q_prime_values + self.TEMPERATURE * entropy) * (1 - D)
+            # Detach y since it is the target. Target values should
+            # be kept fixed.
+            loss = torch.nn.MSELoss()(targets.detach(), qvalues)
 
-        # Detach y since it is the target. Target values should
-        # be kept fixed.
-        loss = torch.nn.MSELoss()(targets.detach(), qvalues)
+            # Backpropagation
+            OPT.zero_grad()
+            loss.backward()
+            OPT.step()
+        else:
+            assert (self.SVI_ON or self.SOFT_OFF)
+            assert (self.MODE == 'hard' or self.MODE == "pyro")
 
-        # Backpropagation
-        OPT.zero_grad()
-        loss.backward()
-        OPT.step()
+            targets = R + self.GAMMA * q_prime_values * (1 - D)
+            loss = torch.nn.MSELoss()(targets.detach(), qvalues)
 
+            OPT.zero_grad()
+            loss.backward()
+            OPT.step()
+
+        # E Step
         if self.SVI_ON:
             for epoch in range(self.SVI_EPOCHS):
                 OPTPi.step(S)
-        elif self.SOFT_ON:
-            loss_policy = torch.nn.KLDivLoss(reduction='batchmean')(
-                torch.nn.LogSoftmax()(Qt(S).detach() / self.TEMPERATURE), Pi(S))
+        else:
+            if self.SOFT_ON:
+                loss_policy = torch.nn.KLDivLoss(reduction='batchmean')(
+                    torch.nn.LogSoftmax()(Qt(S).detach() / self.TEMPERATURE), Pi(S)
+                )
+            else:
+                assert (self.MODE == "hard")
+                # adv = R + self.GAMMA * q_prime_values * (1 - D) - qvalues
+                adv = qvalues
+                loss_policy = -(adv.detach() * torch.log(Pi(S).gather(-1, A.view(-1, 1))).squeeze()).mean()
+
             OPTPi.zero_grad()
             loss_policy.backward()
             OPTPi.step()
-        else:
-            assert (self.MODE == "hard")
 
         # Update target network every few steps
         if epi % self.TARGET_UPDATE_FREQ == 0:
@@ -260,28 +288,24 @@ class AC(torch.nn.Module):
     def run(self, label=""):
         # Train for different seeds
         filename = utils.common.safe_filename(
-            f"AC-{self.MODE}{label}-{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
-        curves = [self.train(seed) for seed in self.SEEDS]
-        with open(f'{filename}.csv', 'w') as csv:
-            numpy.savetxt(csv, numpy.asarray(curves), delimiter=',')
-        # Plot the curve for the given seeds
-        plt.figure(dpi=120)
-        x = range(self.EPISODES)
-        if label == None:
-            label = self.MODE
-        utils.common.plot_arrays(x, curves, 'b', label)
-        plt.legend(loc='best')
-        plt.savefig(f'{filename}.png')
-        plt.show()
-
+            f"AC-{self.MODE}{ '-' + label + '-' if label else '-'}{label}-{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
+        print(filename)
+        utils.common.train_and_plot(
+            self.train,
+            self.SEEDS,
+            filename,
+            label,
+            self.MODE,
+            range(self.EPISODES)
+        )
 
 if __name__ == "__main__":
     ac = AC(
-        "pyro",
+        "hard",
         # SMOKE_TEST=True,
-        TEMPERATURE=1,
-        SVI_EPOCHS=1,
+        # TEMPERATURE=1,
+        # SVI_EPOCHS=1,
         SEEDS=[1],
-        # EPISODES=50
+        EPISODES=300*10
     )
-    ac.run()
+    ac.run("adv")
