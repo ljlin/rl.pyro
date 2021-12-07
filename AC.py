@@ -285,7 +285,7 @@ class AC(torch.nn.Module):
                     ).mean()
                 elif self.AC_MODE == "DQAC":
                     loss_policy = - (
-                        qvalues.detach() *
+                        Qt(S).gather(1, A.view(-1, 1)).squeeze().detach() *
                         torch.log(pi(S).gather(-1, A.view(-1, 1))).squeeze()
                     ).mean()
 
