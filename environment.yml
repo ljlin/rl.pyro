@@ -1,0 +1,12 @@
+name: pyro
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - pyro-ppl
+  - pytorch
+  - gym
+  - matplotlib
+  - numpy
+  - tqdm
