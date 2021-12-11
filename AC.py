@@ -15,16 +15,6 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-class Clamp(torch.nn.Module):
-    def __init__(self, max, min):
-        super().__init__()
-        self.max = max
-        self.min = min
-
-    def forward(self, input):
-        # print(input)
-        return torch.clamp(input, max=self.max, min = self.min)
-
 class AC(torch.nn.Module):
     """
     CS885 Fall 2021 - Reinforcement Learning
@@ -105,13 +95,15 @@ class AC(torch.nn.Module):
         self.TEMPERATURE = TEMPERATURE
 
         assert (self.SVI_ON == (PRIOR is not None))
-        if self.SVI_ON:
-            model = getattr(self, f"model_{PRIOR}", None)
-            assert (model is not None)
-            self.model = model
-
         assert (self.SVI_ON == (SVI_EPOCHS is not None))
-        self.SVI_EPOCHS = SVI_EPOCHS
+        if self.SVI_ON:
+            assert(PRIOR is not None)
+            self.PRIOR = PRIOR
+            self.model = getattr(self, f"model_{PRIOR}", None)
+            assert (self.model is not None)
+
+            assert (SVI_EPOCHS is not None)
+            self.SVI_EPOCHS = SVI_EPOCHS
 
         self.AC_MODE = ["QAC", "VAC", "DQAC"][-1]
 
@@ -203,18 +195,18 @@ class AC(torch.nn.Module):
 
     def guide(self, states):
         pyro.module("agent", self.log_pi)
-        with pyro.plate("state_batch", states.shape[0]):
+        with pyro.plate("state_batch", states.shape[0], device=self.t.device):
             prob_action = self.pi(states)
             action = pyro.sample("action", pyro.distributions.Categorical(prob_action))
 
     def model_unif(self, states):
-        with pyro.plate("state_batch", states.shape[0]):
+        with pyro.plate("state_batch", states.shape[0], device=self.t.device):
             action = pyro.sample("action", pyro.distributions.Categorical(self.unif))
             qvalues = self.Qt(states).detach().gather(1, action.view(-1, 1)).squeeze()
             pyro.factor("reward", qvalues / self.TEMPERATURE)
 
     def model_softmaxQ(self, states):
-        with pyro.plate("state_batch", states.shape[0]):
+        with pyro.plate("state_batch", states.shape[0], device=self.t.device):
             prob_action = torch.nn.functional.softmax(
                 self.Qt(states).detach() / self.TEMPERATURE,
                 dim=-1
@@ -225,7 +217,7 @@ class AC(torch.nn.Module):
     def update_networks(self, epi, buf, pi, OPT_Pi, Q, Qt, V, OPT_Q):
         # Sample a minibatch (s, a, r, s', d)
         # Each variable is a vector of corresponding values
-        if self.SOFT_ON or self.AC_MODE == "DQAC":
+        if self.SOFT_ON:
             S, A, R, S_prime, D = buf.sample(self.MINIBATCH_SIZE, self.t)
             A_prime = torch.distributions.Categorical(pi(S_prime)).sample()
             # Get Q(s, a) for every (s, a) in the minibatch
@@ -234,8 +226,10 @@ class AC(torch.nn.Module):
             q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
         else:
             S, A, R, S_prime, D, N = buf.sample(self.MINIBATCH_SIZE, self.t)
-            # Get (max a. Qt(s', a)) for every (s') in the minibatch
-            # q_prime_values = Qt(S_prime).max(-1)[0]
+            if self.AC_MODE == 'DQAC':
+                A_prime = torch.distributions.Categorical(pi(S_prime)).sample()
+                qvalues = Q(S).gather(1, A.view(-1, 1)).squeeze()
+                q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
 
         # M Step
         if self.SVI_ON or self.AC_MODE == "DQAC":
@@ -304,6 +298,7 @@ class AC(torch.nn.Module):
                     ).detach()
                     loss_policy = - (
                         adv *
+                        # torch.pow(self.GAMMA, N).detach() *
                         self.log_pi(S).gather(-1, A.view(-1, 1)).squeeze()
                     ).mean()
 
@@ -338,7 +333,7 @@ class AC(torch.nn.Module):
         for epi in pbar:
 
             # Play an episode and log episodic reward
-            if self.SOFT_ON or self.AC_MODE == "DQAC":
+            if self.SOFT_ON:
                 S, A, R = utils.envs.play_episode_rb(env, policy, buf)
             else:
                 S, A, R = utils.envs.play_episode_rb_with_steps(env,policy,buf)
@@ -370,15 +365,20 @@ class AC(torch.nn.Module):
 
     def run(self, info=None, SHOW = True):
         # Train for different seeds
+        label=f"AC-{self.MODE}"
+        if self.SVI_ON:
+            label += f"-prior_{self.PRIOR}"
+        if self.SOFT_ON:
+            label += f"-TEMPERATURE({self.TEMPERATURE})"
+
         filename = utils.common.safe_filename(
-            f"AC-{self.MODE}{ '-' + info + '-' if info else '-'}{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
+            f"{label}-{self.ENV_NAME}{'-' + info + '-' if info else '-'}-SEED({self.SEEDS})")
         print(filename)
         utils.common.train_and_plot(
             self.train,
             self.SEEDS,
             filename,
-            info,
-            self.MODE,
+            label,
             range(self.EPISODES),
             SHOW
         )
@@ -390,7 +390,7 @@ if __name__ == "__main__":
         # LEARNING_RATE=5e-5,
         SEEDS=[1],
         # EPISODES=3000
-    ).run("DQAC")
+    ).run("DQAC-GAMMA")
 
     # AC(
     #     "pyro",

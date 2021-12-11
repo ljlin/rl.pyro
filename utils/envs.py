@@ -44,9 +44,10 @@ def play_episode(env, policy, render = False):
         rewards.append(reward)
     return states, actions, rewards
 
-def play_episode_tensor(env, policy, render = False):
+def play_episode_tensor(env, policy, t, render = False):
     states, actions, rewards = play_episode(env,policy,render)
-    return torch.tensor(states, dtype=torch.float32), torch.tensor(actions), torch.tensor(rewards)
+    return t.f(states), t.l(actions), t.f(rewards)
+
 # Play an episode according to a given policy and add 
 # to a replay buffer
 # env: environment

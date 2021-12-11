@@ -16,3 +16,6 @@ class TorchHelper:
     
     def l(self, x):
         return torch.tensor(x).long().to(self.device)
+
+    def b(self, x):
+        return torch.tensor(x).bool().to(self.device)

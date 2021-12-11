@@ -48,7 +48,8 @@ class REINFORCE(torch.nn.Module):
             EPISODES=300 * 25,
             # Total number of episodes to learn over
             TEMPERATURE=None,
-            UNIF_PRIOR = None,
+            PRIOR=None,
+            MODEL_MODE=None
     ):
         super().__init__()
         self.t = utils.torch.TorchHelper()
@@ -69,12 +70,22 @@ class REINFORCE(torch.nn.Module):
             self.EPISODES = EPISODES
 
         assert (self.SOFT_OFF != self.SOFT_ON)
-        assert (self.SOFT_ON <= (TEMPERATURE is not None))
-        assert (self.SOFT_OFF <= (TEMPERATURE is None))
+        assert (self.SOFT_ON == (TEMPERATURE is not None))
+        assert (self.SOFT_OFF == (TEMPERATURE is None))
         self.TEMPERATURE = TEMPERATURE
 
-        assert ((UNIF_PRIOR is not None) <= self.SVI_ON)
-        self.UNIF_PRIOR = UNIF_PRIOR
+        assert (self.SVI_ON == (PRIOR is not None))
+        assert (self.SVI_ON == (MODEL_MODE is not None))
+        if self.SVI_ON:
+            assert (PRIOR is not None)
+            self.PRIOR = PRIOR
+            self.prior = getattr(self, f"prior_{PRIOR}", None)
+            assert (self.prior is not None)
+
+            assert (MODEL_MODE is not None)
+            self.MODEL_MODE = MODEL_MODE
+            self.model = getattr(self, f"model_{MODEL_MODE}", None)
+            assert (self.model is not None)
 
     @property
     def SVI_ON(self):
@@ -99,7 +110,7 @@ class REINFORCE(torch.nn.Module):
         assert (isinstance(env.observation_space, gym.spaces.box.Box))
         self.OBS_N = env.observation_space.shape[0]
         self.ACT_N = env.action_space.n
-        self.unif = torch.ones(self.ACT_N) / self.ACT_N
+        self.unif = torch.ones(self.ACT_N, device=self.t.device) / self.ACT_N
 
         self.pi = torch.nn.Sequential(
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
@@ -109,7 +120,6 @@ class REINFORCE(torch.nn.Module):
         ).to(self.DEVICE)
 
         if self.SVI_ON:
-            self.prior = self.unif_prior if self.UNIF_PRIOR else self.pi_prior
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
             OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
         else:
@@ -117,39 +127,54 @@ class REINFORCE(torch.nn.Module):
 
         return env, test_env, self.pi, OPT
 
-    def guide(self, env=None):
+    def guide(self, env=None, trajectory=None):
         pyro.module("agentmodel", self)
-        time_stamp = 0
-        states, total_reward = [], 0
-        obs = self.t.f(env.reset())
+        step = 0
+        S, A, R, D = [], [], [], []
+        obs = env.reset()
         done = False
         while not done:
-            states.append(obs)
+            S.append(obs)
+            D.append(done)
             action = pyro.sample(
-                "action_{}".format(time_stamp),
-                pyro.distributions.Categorical(self.pi(obs))
+                f"action_{step}",
+                pyro.distributions.Categorical(self.pi(self.t.f(obs)))
             ).item()
             obs, reward, done, info = env.step(action)
-            obs = self.t.f(obs)
-            total_reward += reward
-            time_stamp += 1
-        states.append(obs)
-        self.traj = (states, total_reward)
+            A.append(action)
+            R.append(reward)
+            step += 1
+        S.append(obs)
+        D.append(done)
 
-    def pi_prior(self, state):
+        trajectory["S"] = self.t.f(S)
+        trajectory["A"] = self.t.i(A)
+        trajectory["R"] = self.t.f(R)
+        trajectory["D"] = self.t.b(D)
+
+    def prior_pi(self, state):
         return self.pi(state)
 
-    def unif_prior(self, state):
+    def prior_unif(self, state):
         return self.unif
 
-    def model(self, env=None):
-        S, total_reward = self.traj
-        for idx, state in enumerate(S[:-1]):
+    def model_sequential(self, env=None, trajectory=None):
+        S, R = trajectory["S"], trajectory["R"]
+        for step, state in enumerate(S[:-1]):
             action = pyro.sample(
-                "action_{}".format(idx),
+                "action_{}".format(step),
                 pyro.distributions.Categorical(self.prior(state))
             )
-        pyro.factor("total_reward", total_reward / self.TEMPERATURE)
+            pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
+
+    def model_plate(self, env=None, trajectory=None):
+        S, R = trajectory["S"], trajectory["R"]
+        for step in pyro.plate("trajectory", len(R)):
+            action = pyro.sample(
+                f"action_{step}",
+                pyro.distributions.Categorical(self.prior(S[step]))
+            )
+            pyro.factor(f"reward_{step}", torch.sum(R / self.TEMPERATURE))
 
     def policy(self, env, obs):
         with torch.no_grad():
@@ -171,31 +196,32 @@ class REINFORCE(torch.nn.Module):
         pbar = tqdm.trange(self.EPISODES)
         for epi in pbar:
             if self.SVI_ON:
-                OPT.step(env)
-                trainRs += [self.traj[-1]]
+                trajectory = {"S": None, "R": None}
+                OPT.step(env, trajectory=trajectory)
+                trainRs += [sum(trajectory["R"]).item()]
             else:
                 # Play an episode and log episodic reward
 
-                S, A, R = utils.envs.play_episode_tensor(env, self.policy)
+                S, A, R = utils.envs.play_episode_tensor(env, self.policy, self.t)
 
                 nSteps = len(S)
 
-                if self.MODE == "soft":
-                    with torch.no_grad():
-                        R -= self.TEMPERATURE * torch.log(pi(S[:-1]).gather(-1, A.view(-1, 1))).squeeze()
-
-                G = torch.zeros(nSteps)
+                G = torch.zeros(nSteps, device=self.t.device)
                 G[-1] = R[-1]
                 for step in reversed(range(nSteps - 1)):
                     G[step] = R[step] + self.GAMMA * G[step + 1]
 
-                adv = torch.tensor([(self.GAMMA ** step) * G[step] for step in range(nSteps - 1)]).detach()
-                loss = - adv * torch.log(pi(S[:-1]).gather(-1, A.view(-1, 1))).squeeze()
+                log_prob = torch.log(pi(S[:-1]).gather(-1, A.view(-1, 1))).squeeze()
+                with torch.no_grad():
+                    if self.SOFT_ON:
+                        G[:-1] -= self.TEMPERATURE * log_prob
+                    gamma_n = torch.pow(self.GAMMA, torch.arange(nSteps - 1, device=self.t.device))
+                loss = - gamma_n * G[:-1] * log_prob
                 OPT.zero_grad()
                 loss.mean().backward()
                 OPT.step()
 
-                trainRs += [sum(R)]
+                trainRs += [sum(R).item()]
                 # Update progress bar
             last25Rs += [sum(trainRs[-25:]) / len(trainRs[-25:])]
             pbar.set_description("R25(%g)" % (last25Rs[-1]))
@@ -208,17 +234,21 @@ class REINFORCE(torch.nn.Module):
 
         return last25Rs
 
-    def run(self, info=None, SHOW = True):
+    def run(self, info=None, SHOW=True):
         # Train for different seeds
+        label=f"REINFORCE-{self.MODE}"
+        if self.SVI_ON:
+            label += f"-prior_{self.PRIOR}-model_{self.MODEL_MODE}"
+        if self.SOFT_ON:
+            label += f"-TEMPERATURE({self.TEMPERATURE})"
         filename = utils.common.safe_filename(
-            f"REINFORCE-{self.MODE}{ '-' + info + '-' if info else '-'}{self.ENV_NAME}-SEED={self.SEEDS}-TEMPERATURE={self.TEMPERATURE}")
+            f"{label}-{self.ENV_NAME}{'-' + info + '-' if info else '-'}-SEED({self.SEEDS})")
         print(filename)
         utils.common.train_and_plot(
             self.train,
             self.SEEDS,
             filename,
-            info,
-            self.MODE,
+            label,
             range(self.EPISODES),
             SHOW
         )
@@ -229,8 +259,7 @@ if __name__ == "__main__":
         "pyro",
         SMOKE_TEST=True,
         TEMPERATURE=1,
-        UNIF_PRIOR=False
-        # SEEDS=[1,2],
-        # EPISODES=50
+        PRIOR="unif",
+        MODEL_MODE="plate"
     )
     reinforece.run()

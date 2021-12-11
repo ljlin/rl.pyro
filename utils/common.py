@@ -11,7 +11,7 @@ def load(filename):
         return b
 
 def safe_filename(filename):
-    keepcharacters = ('.','_','-',"=")
+    keepcharacters = ('.','_','-','=','(',')')
     return "".join(c for c in filename if c.isalnum() or c in keepcharacters).rstrip("_")
 
 # Plot mean curve and (mean-std, mean+std) curve with some transparency
@@ -27,13 +27,12 @@ def update(target, source):
     for tp, p in zip(target.parameters(), source.parameters()):
         tp.data.copy_(p.data)
 
-def train_and_plot(train, SEEDS, filename, info, MODE, x, show = False):
+def train_and_plot(train, SEEDS, filename, label, x, show = False):
     curves = [train(seed) for seed in SEEDS]
     with open(f'{filename}.csv', 'w') as csv:
         numpy.savetxt(csv, numpy.asarray(curves), delimiter=',')
     # Plot the curve for the given seeds
     plt.figure(dpi=120)
-    label = f"{MODE}{'-' + info if info else ''}"
     plot_arrays(x, curves, 'b', label)
     plt.legend(loc='best')
     plt.savefig(f'{filename}.png')

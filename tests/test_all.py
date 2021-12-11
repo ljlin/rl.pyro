@@ -6,8 +6,10 @@ class Test(TestCase):
     def test_reinforce(self):
         REINFORCE.REINFORCE("hard", SMOKE_TEST=True).run(SHOW=False)
         REINFORCE.REINFORCE("soft", SMOKE_TEST=True, TEMPERATURE=1).run(SHOW=False)
-        REINFORCE.REINFORCE("pyro", SMOKE_TEST=True, TEMPERATURE=1, UNIF_PRIOR=True).run(SHOW=False)
-        REINFORCE.REINFORCE("pyro", SMOKE_TEST=True, TEMPERATURE=1, UNIF_PRIOR=False).run(SHOW=False)
+        REINFORCE.REINFORCE("pyro", SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
+        REINFORCE.REINFORCE("pyro", SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
+        REINFORCE.REINFORCE("pyro", SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
+        REINFORCE.REINFORCE("pyro", SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)
     def test_ac(self):
         AC.AC("hard", SMOKE_TEST=True).run(SHOW=False)
         AC.AC("soft", SMOKE_TEST=True, TEMPERATURE=1).run(SHOW=False)
