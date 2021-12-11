@@ -33,9 +33,9 @@ class REINFORCE(torch.nn.Module):
     def __init__(
             self,
             MODE,
+            ENV_NAME,
+            GAMMA,
             SMOKE_TEST=False,
-            ENV_NAME="CartPole-v0",
-            GAMMA=0.99,
             # Discount factor in episodic reward objective
             MINIBATCH_SIZE=64,
             # How many examples to sample per train step
@@ -236,7 +236,7 @@ class REINFORCE(torch.nn.Module):
 
     def run(self, info=None, SHOW=True):
         # Train for different seeds
-        label=f"REINFORCE-{self.MODE}"
+        label=f"REINFORCE-{self.MODE}-γ({self.GAMMA})"
         if self.SVI_ON:
             label += f"-{self.PRIOR}-{self.MODEL_MODE}"
         if self.SOFT_ON:
@@ -255,11 +255,9 @@ class REINFORCE(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    reinforece = REINFORCE(
-        "pyro",
-        SMOKE_TEST=True,
-        TEMPERATURE=1,
-        PRIOR="unif",
-        MODEL_MODE="plate"
-    )
-    reinforece.run()
+    REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True).run(SHOW=False)
+    REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1).run(SHOW=False)
+    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
+    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
+    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
+    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)

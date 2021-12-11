@@ -36,11 +36,11 @@ class AC(torch.nn.Module):
     def __init__(
             self,
             MODE,
+            ENV_NAME,
+            GAMMA,
             PRIOR=None,
             TEMPERATURE=None,
             SMOKE_TEST=False,
-            ENV_NAME="CartPole-v0",
-            GAMMA=0.99,
             # Discount factor in episodic reward objective
             MINIBATCH_SIZE=64,
             # How many examples to sample per train step
@@ -365,7 +365,7 @@ class AC(torch.nn.Module):
 
     def run(self, info=None, SHOW = True):
         # Train for different seeds
-        label=f"AC-{self.MODE}"
+        label=f"AC-{self.MODE}-γ({self.GAMMA})"
         if self.SVI_ON:
             label += f"-{self.PRIOR}"
         if self.SOFT_ON:
@@ -384,20 +384,7 @@ class AC(torch.nn.Module):
         )
 
 if __name__ == "__main__":
-    AC(
-        "hard",
-        # SMOKE_TEST=True,
-        # LEARNING_RATE=5e-5,
-        SEEDS=[1],
-        # EPISODES=3000
-    ).run("DQAC-GAMMA")
-
-    # AC(
-    #     "pyro",
-    #     # SMOKE_TEST=True,
-    #     PRIOR="unif",
-    #     TEMPERATURE=1,
-    #     SVI_EPOCHS=1,
-    #     SEEDS=[1],
-    #     EPISODES=300
-    # ).run()
+    AC("hard", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True).run(SHOW=False)
+    AC("soft", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1).run(SHOW=False)
+    AC("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", SVI_EPOCHS = 1).run(SHOW=False)
+    AC("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="softmaxQ", SVI_EPOCHS = 1).run(SHOW=False)
