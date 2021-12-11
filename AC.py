@@ -367,9 +367,9 @@ class AC(torch.nn.Module):
         # Train for different seeds
         label=f"AC-{self.MODE}"
         if self.SVI_ON:
-            label += f"-prior_{self.PRIOR}"
+            label += f"-{self.PRIOR}"
         if self.SOFT_ON:
-            label += f"-TEMPERATURE({self.TEMPERATURE})"
+            label += f"-λ({self.TEMPERATURE})"
 
         filename = utils.common.safe_filename(
             f"{label}-{self.ENV_NAME}{'-' + info + '-' if info else '-'}-SEED({self.SEEDS})")
