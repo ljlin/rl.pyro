@@ -246,7 +246,7 @@ class REINFORCE(torch.nn.Module):
         if self.SOFT_ON:
             label += f"-λ({self.TEMPERATURE})"
         filename = utils.common.safe_filename(
-            f"{label}-{self.ENV_NAME}{'-' + info + '-' if info else '-'}-SEED({self.SEEDS})")
+            f"{label}-{self.ENV_NAME}{'-' + info + '-' if info else '-'}SEED({self.SEEDS})")
         print(filename)
         utils.common.train_and_plot(
             self.train,
@@ -259,9 +259,10 @@ class REINFORCE(torch.nn.Module):
 
 
 if __name__ == "__main__":
+    REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=8000, SEEDS=[1,2,3,4,5]).run()
     # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99).run(SHOW=False)
     # REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1).run(SHOW=False)
-    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)

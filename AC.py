@@ -305,7 +305,7 @@ class AC(torch.nn.Module):
             label += f"-λ({self.TEMPERATURE})"
 
         filename = utils.common.safe_filename(
-            f"{label}-{self.ENV_NAME}{'-' + info + '-' if info else '-'}-SEED({self.SEEDS})")
+            f"{label}-{self.ENV_NAME}{'-' + info + '-' if info else '-'}SEED({self.SEEDS})")
         print(filename)
         utils.common.train_and_plot(
             self.train,
