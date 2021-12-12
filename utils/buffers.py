@@ -17,12 +17,8 @@ class ReplayBuffer:
     # sample: return minibatch of size n
     def sample(self, n, t):
         minibatch = random.sample(self.buf, n)
-        batch = []
-        
-        for mb in minibatch:
-            batch += [mb]
 
-        res = [chk for chk in zip(*batch)]
+        res = [chk for chk in zip(*minibatch)]
         if len(res) == 5:
             S, A, R, S2, D = res
             return t.f(S), t.l(A), t.f(R), t.f(S2), t.i(D)

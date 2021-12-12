@@ -110,25 +110,25 @@ class REINFORCE(torch.nn.Module):
         assert (isinstance(env.observation_space, gym.spaces.box.Box))
         self.OBS_N = env.observation_space.shape[0]
         self.ACT_N = env.action_space.n
-        self.unif = torch.ones(self.ACT_N, device=self.t.device) / self.ACT_N
+        self.unif_logits = torch.ones(self.ACT_N, device=self.t.device)
 
-        self.pi = torch.nn.Sequential(
+        self.log_pi = torch.nn.Sequential(
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.ACT_N),
-            torch.nn.Softmax(dim=-1)
+            torch.nn.LogSoftmax(dim=-1)
         ).to(self.DEVICE)
 
         if self.SVI_ON:
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
             OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
         else:
-            OPT = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
+            OPT = torch.optim.Adam(self.log_pi.parameters(), lr=self.LEARNING_RATE)
 
-        return env, test_env, self.pi, OPT
+        return env, test_env, self.log_pi, OPT
 
     def guide(self, env=None, trajectory=None):
-        pyro.module("agentmodel", self)
+        pyro.module("agentmodel", self.log_pi)
         step = 0
         S, A, R, D = [], [], [], []
         obs = env.reset()
@@ -138,7 +138,7 @@ class REINFORCE(torch.nn.Module):
             D.append(done)
             action = pyro.sample(
                 f"action_{step}",
-                pyro.distributions.Categorical(self.pi(self.t.f(obs)))
+                pyro.distributions.Categorical(logits=self.log_pi(self.t.f(obs)))
             ).item()
             obs, reward, done, info = env.step(action)
             A.append(action)
@@ -153,17 +153,17 @@ class REINFORCE(torch.nn.Module):
         trajectory["D"] = self.t.b(D)
 
     def prior_pi(self, state):
-        return self.pi(state)
+        return self.log_pi(state)
 
     def prior_unif(self, state):
-        return self.unif
+        return self.unif_logits
 
     def model_sequential(self, env=None, trajectory=None):
         S, R = trajectory["S"], trajectory["R"]
         for step, state in enumerate(S[:-1]):
             action = pyro.sample(
                 "action_{}".format(step),
-                pyro.distributions.Categorical(self.prior(state))
+                pyro.distributions.Categorical(logits=self.prior(state))
             )
             pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
 
@@ -172,23 +172,23 @@ class REINFORCE(torch.nn.Module):
         for step in pyro.plate("trajectory", len(R)):
             action = pyro.sample(
                 f"action_{step}",
-                pyro.distributions.Categorical(self.prior(S[step]))
+                pyro.distributions.Categorical(logits=self.prior(S[step]))
             )
-            pyro.factor(f"reward_{step}", torch.sum(R / self.TEMPERATURE))
-
-    def policy(self, env, obs):
-        with torch.no_grad():
-            obs = self.t.f(obs).view(-1, self.OBS_N)  # Convert to torch tensor
-            action = torch.distributions.Categorical(self.pi(obs)).sample().item()
-        return action
+            pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
 
     def train(self, seed):
 
         print("Seed=%d" % seed)
-        env, test_env, pi, OPT = self.create_everything(seed)
+        env, test_env, log_pi, OPT = self.create_everything(seed)
 
         if self.SVI_ON:
             pyro.clear_param_store()
+
+        def policy(env, obs):
+            with torch.no_grad():
+                obs = self.t.f(obs).view(-1, self.OBS_N)  # Convert to torch tensor
+                action = torch.distributions.Categorical(logits=log_pi(obs)).sample().item()
+            return action
 
         trainRs = []
         last25Rs = []
@@ -202,7 +202,7 @@ class REINFORCE(torch.nn.Module):
             else:
                 # Play an episode and log episodic reward
 
-                S, A, R = utils.envs.play_episode_tensor(env, self.policy, self.t)
+                S, A, R = utils.envs.play_episode_tensor(env, policy, self.t)
 
                 nSteps = len(S)
 
@@ -211,7 +211,7 @@ class REINFORCE(torch.nn.Module):
                 for step in reversed(range(nSteps - 1)):
                     G[step] = R[step] + self.GAMMA * G[step + 1]
 
-                log_prob = torch.log(pi(S[:-1]).gather(-1, A.view(-1, 1))).squeeze()
+                log_prob = log_pi(S[:-1]).gather(-1, A.view(-1, 1)).squeeze()
                 with torch.no_grad():
                     if self.SOFT_ON:
                         G[:-1] -= self.TEMPERATURE * log_prob
@@ -255,9 +255,9 @@ class REINFORCE(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True).run(SHOW=False)
-    REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1).run(SHOW=False)
-    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
-    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
-    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
-    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)
+    # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True).run(SHOW=False)
+    REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1).run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)

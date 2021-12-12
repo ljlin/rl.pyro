@@ -105,9 +105,6 @@ class AC(torch.nn.Module):
             assert (SVI_EPOCHS is not None)
             self.SVI_EPOCHS = SVI_EPOCHS
 
-        self.AC_MODE = ["QAC", "VAC", "DQAC"][-1]
-
-
     @property
     def SVI_ON(self):
         return self.MODE == "pyro"
@@ -139,14 +136,12 @@ class AC(torch.nn.Module):
         assert (isinstance(env.observation_space, gym.spaces.box.Box))
         self.OBS_N = env.observation_space.shape[0]
         self.ACT_N = env.action_space.n
-        self.unif = torch.ones(self.MINIBATCH_SIZE, self.ACT_N) / self.ACT_N
+        self.unif_logits = torch.ones(self.MINIBATCH_SIZE, self.ACT_N, device=self.t.device)
 
         self.log_pi = torch.nn.Sequential(
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.ACT_N),
-            # Clamp(max = 10, min = -10),
-            # torch.nn.Softmax(dim=-1)
             torch.nn.LogSoftmax(dim=-1)
         ).to(self.DEVICE)
 
@@ -158,107 +153,61 @@ class AC(torch.nn.Module):
         else:
             OPT_pi = torch.optim.Adam(self.log_pi.parameters(), lr=self.LEARNING_RATE)
 
-        if self.SOFT_ON or self.AC_MODE == "DQAC":
-            self.Q = torch.nn.Sequential(
-                torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
-                torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
-                torch.nn.Linear(self.HIDDEN, self.ACT_N)
-            ).to(self.DEVICE)
-            self.Qt = torch.nn.Sequential(
-                torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
-                torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
-                torch.nn.Linear(self.HIDDEN, self.ACT_N)
-            ).to(self.DEVICE)
-            OPT = torch.optim.Adam(self.Q.parameters(), lr=self.LEARNING_RATE)
-            return env, test_env, buf, self.pi, OPT_pi, self.Q, self.Qt, None, OPT
-        else:
-            if self.AC_MODE == "VAC":
-                self.V = torch.nn.Sequential(
-                    torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
-                    torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
-                    torch.nn.Linear(self.HIDDEN, 1),
-                ).to(self.DEVICE)
-                OPT = torch.optim.Adam(self.V.parameters(), lr=self.LEARNING_RATE)
-                return env, test_env, buf, self.pi, OPT_pi, None, None, self.V, OPT
-            elif self.AC_MODE == "QAC":
-                self.Q = torch.nn.Sequential(
-                    torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
-                    torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
-                    torch.nn.Linear(self.HIDDEN, self.ACT_N)
-                ).to(self.DEVICE)
-                OPT = torch.optim.Adam(self.Q.parameters(), lr=self.LEARNING_RATE)
-                return env, test_env, buf, self.pi, OPT_pi, self.Q, None, None, OPT
+        self.Q = torch.nn.Sequential(
+            torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
+            torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
+            torch.nn.Linear(self.HIDDEN, self.ACT_N)
+        ).to(self.DEVICE)
+        self.Qt = torch.nn.Sequential(
+            torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
+            torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
+            torch.nn.Linear(self.HIDDEN, self.ACT_N)
+        ).to(self.DEVICE)
 
-    def pi(self,input):
+        OPT_Q = torch.optim.Adam(self.Q.parameters(), lr=self.LEARNING_RATE)
+        return env, test_env, buf, self.pi, OPT_pi, self.Q, self.Qt, OPT_Q
+
+    def pi(self, input):
         log_out = self.log_pi(input)
         return torch.exp(log_out)
 
-    def guide(self, states):
+    def guide(self, S):
         pyro.module("agent", self.log_pi)
-        with pyro.plate("state_batch", states.shape[0], device=self.t.device):
-            prob_action = self.pi(states)
-            action = pyro.sample("action", pyro.distributions.Categorical(prob_action))
+        with pyro.plate("batch", S.shape[0], device=self.t.device):
+            A = pyro.sample("action", pyro.distributions.Categorical(logits=self.log_pi(S)))
 
-    def model_unif(self, states):
-        with pyro.plate("state_batch", states.shape[0], device=self.t.device):
-            action = pyro.sample("action", pyro.distributions.Categorical(self.unif))
-            qvalues = self.Qt(states).detach().gather(1, action.view(-1, 1)).squeeze()
+    def model_unif(self, S):
+        with pyro.plate("batch", S.shape[0], device=self.t.device):
+            A = pyro.sample("action", pyro.distributions.Categorical(logits=self.unif_logits))
+            qvalues = self.Qt(S).detach().gather(1, A.view(-1, 1)).squeeze()
             pyro.factor("reward", qvalues / self.TEMPERATURE)
 
     def model_softmaxQ(self, states):
         with pyro.plate("state_batch", states.shape[0], device=self.t.device):
-            prob_action = torch.nn.functional.softmax(
+            prob_action = torch.nn.functional.log_softmax(
                 self.Qt(states).detach() / self.TEMPERATURE,
                 dim=-1
             )
-            action = pyro.sample("action", pyro.distributions.Categorical(prob_action))
+            action = pyro.sample("action", pyro.distributions.Categorical(logits=prob_action))
 
     # Update networks
-    def update_networks(self, epi, buf, pi, OPT_Pi, Q, Qt, V, OPT_Q):
+    def update_networks(self, epi, buf, log_pi, OPT_Pi, Q, Qt, OPT_Q):
         # Sample a minibatch (s, a, r, s', d)
         # Each variable is a vector of corresponding values
-        if self.SOFT_ON:
-            S, A, R, S_prime, D = buf.sample(self.MINIBATCH_SIZE, self.t)
-            A_prime = torch.distributions.Categorical(pi(S_prime)).sample()
-            # Get Q(s, a) for every (s, a) in the minibatch
-            qvalues = Q(S).gather(1, A.view(-1, 1)).squeeze()
-            # Get Qt(s', a') for every (s') in the minibatch
-            q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
-        else:
-            S, A, R, S_prime, D, N = buf.sample(self.MINIBATCH_SIZE, self.t)
-            if self.AC_MODE == 'DQAC':
-                A_prime = torch.distributions.Categorical(pi(S_prime)).sample()
-                qvalues = Q(S).gather(1, A.view(-1, 1)).squeeze()
-                q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
+        S, A, R, S_prime, D, N = buf.sample(self.MINIBATCH_SIZE, self.t)
+        dist = torch.distributions.Categorical(logits=log_pi(S_prime))
+        A_prime = dist.sample()
+        qvalues = Q(S).gather(1, A.view(-1, 1)).squeeze()
+        q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
 
         # M Step
-        if self.SVI_ON or self.AC_MODE == "DQAC":
-            targets = R + self.GAMMA * q_prime_values * (1 - D)
-            loss = torch.nn.functional.mse_loss(targets.detach(), qvalues)
-        elif self.SOFT_ON:
-            assert (self.MODE == 'soft')
-            entropy = torch.mean(torch.distributions.Categorical(pi(S_prime)).entropy())
+        entropy_term = (self.SVI_OFF) and (self.SOFT_ON)
+        if entropy_term:
+            entropy = torch.mean(dist.entropy())
             targets = R + self.GAMMA * (q_prime_values + self.TEMPERATURE * entropy) * (1 - D)
-            loss = torch.nn.functional.mse_loss(targets.detach(), qvalues)
         else:
-            # delta = (R + self.GAMMA * Q(S_prime).max(-1)[0] - Q(S).gather(1, A.view(-1, 1)).squeeze()).detach()
-            # loss = - (
-            #     delta *
-            #     torch.pow(self.GAMMA, N).detach() *
-            #     Q(S).gather(1, A.view(-1, 1)).squeeze()
-            # ).mean()
-
-            # targets = R + self.GAMMA * q_prime_values * (1 - D)
-            # loss = torch.nn.functional.smooth_l1_loss(qvalues, targets.detach())
-            if self.AC_MODE == "VAC":
-                delta = (R + self.GAMMA * V(S_prime) - V(S)).detach()
-                loss = - (delta * V(S)).mean()
-            elif self.AC_MODE == "QAC":
-                A_prime = torch.distributions.Categorical(pi(S_prime)).sample()
-                q_prime_values = Q(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
-                qvalues = Q(S).gather(1, A.view(-1, 1)).squeeze()
-                delta = (R + self.GAMMA * q_prime_values - qvalues).detach()
-                loss = - (delta * qvalues).mean()
+            targets = R + self.GAMMA * q_prime_values * (1 - D)
+        loss = torch.nn.functional.mse_loss(targets.detach(), qvalues)
 
         OPT_Q.zero_grad()
         loss.backward()
@@ -270,44 +219,31 @@ class AC(torch.nn.Module):
                 OPT_Pi.step(S)
         else:
             if self.SOFT_ON:
-                loss_policy = torch.nn.KLDivLoss(reduction='batchmean')(
-                    torch.nn.functional.log_softmax(Qt(S).detach() / self.TEMPERATURE, dim=-1), pi(S)
-                )
+                loss_policy = torch.nn.functional.kl_div(
+                    torch.nn.functional.log_softmax(Qt(S).detach() / self.TEMPERATURE, dim=-1),
+                    self.pi(S),
+                    reduction='batchmean'
+                ) # [torch.nn.functional.kl_div] input: log x, target: y, ret: y * (log y - log x)
             else:
-                if self.AC_MODE == "VAC":
-                    loss_policy = - (
-                        delta *
-                        torch.pow(self.GAMMA, N) *
-                        torch.log(pi(S).gather(-1, A.view(-1, 1))).squeeze()
-                    ).mean()
-                elif self.AC_MODE == "QAC":
-                    # adv = (
-                    #     Q(S).gather(1, A.view(-1, 1)).squeeze() -
-                    #     (pi(S) * Q(S)).sum(-1)
-                    # )
-                    loss_policy = - (
-                        qvalues.detach() *
-                        torch.log(pi(S).gather(-1, A.view(-1, 1))).squeeze()
-                    ).mean()
-                elif self.AC_MODE == "DQAC":
+                with torch.no_grad():
                     adv = (
-                        R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (pi(S) * Qt(S)).sum(-1) #slides
+                        R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (self.pi(S) * Qt(S)).sum(-1) #slides
                         # (R + self.GAMMA * Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()) - Qt(S).gather(1, A.view(-1, 1)).squeeze() #?
                         # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - Qt(S).gather(1, A.view(-1, 1)).squeeze()
                         # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - (pi(S) * Qt(S)).sum(-1)
-                    ).detach()
-                    loss_policy = - (
-                        adv *
-                        # torch.pow(self.GAMMA, N).detach() *
-                        self.log_pi(S).gather(-1, A.view(-1, 1)).squeeze()
-                    ).mean()
-
+                    )
+                    gmma_n = torch.pow(self.GAMMA, N)
+                loss_policy = - (
+                    adv *
+                    gmma_n *
+                    log_pi(S).gather(-1, A.view(-1, 1)).squeeze()
+                ).mean()
             OPT_Pi.zero_grad()
             loss_policy.backward()
             OPT_Pi.step()
-        # print(loss_policy.item())
+
         # Update target network every few steps
-        if (self.SOFT_ON  or self.AC_MODE == "DQAC" ) and epi % self.TARGET_UPDATE_FREQ == 0:
+        if epi % self.TARGET_UPDATE_FREQ == 0:
             utils.common.update(Qt, Q)
 
         return loss.item()
@@ -315,7 +251,7 @@ class AC(torch.nn.Module):
     def train(self, seed):
 
         print("Seed=%d" % seed)
-        env, test_env, buf, pi, OPT_pi, Q, Qt, V, OPT = self.create_everything(seed)
+        env, test_env, buf, log_pi, OPT_pi, Q, Qt, OPT_Q = self.create_everything(seed)
 
         if self.SVI_ON:
             pyro.clear_param_store()
@@ -323,7 +259,7 @@ class AC(torch.nn.Module):
         def policy(env, obs):
             with torch.no_grad():
                 obs = self.t.f(obs).view(-1, self.OBS_N)  # Convert to torch tensor
-                action = torch.distributions.Categorical(pi(obs)).sample().item()
+                action = torch.distributions.Categorical(logits=log_pi(obs)).sample().item()
             return action
 
         testRs = []
@@ -333,17 +269,14 @@ class AC(torch.nn.Module):
         for epi in pbar:
 
             # Play an episode and log episodic reward
-            if self.SOFT_ON:
-                S, A, R = utils.envs.play_episode_rb(env, policy, buf)
-            else:
-                S, A, R = utils.envs.play_episode_rb_with_steps(env,policy,buf)
+            S, A, R = utils.envs.play_episode_rb_with_steps(env, policy, buf)
 
             # Train after collecting sufficient experience
             if epi >= self.TRAIN_AFTER_EPISODES:
 
                 # Train for TRAIN_EPOCHS
                 for tri in range(self.TRAIN_EPOCHS):
-                    self.update_networks(epi, buf, pi, OPT_pi, Q, Qt, V, OPT)
+                    self.update_networks(epi, buf, log_pi, OPT_pi, Q, Qt, OPT_Q)
 
             # Evaluate for TEST_EPISODES number of episodes
             Rews = []
@@ -384,7 +317,7 @@ class AC(torch.nn.Module):
         )
 
 if __name__ == "__main__":
-    AC("hard", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True).run(SHOW=False)
-    AC("soft", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1).run(SHOW=False)
-    AC("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", SVI_EPOCHS = 1).run(SHOW=False)
-    AC("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="softmaxQ", SVI_EPOCHS = 1).run(SHOW=False)
+    # AC("hard", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True).run(SHOW=False)
+    AC("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, SEEDS=[1]).run(SHOW=False)
+    # AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", SVI_EPOCHS = 1).run(SHOW=False)
+    # AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="softmaxQ", SVI_EPOCHS = 1).run(SHOW=False)
