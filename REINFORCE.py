@@ -180,6 +180,26 @@ class REINFORCE(torch.nn.Module):
             pyro.factor(f"discount_{step}", self.LN_GAMMA)
             pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
 
+    def update_network(self, S, A, R, log_pi, OPT):
+        log_prob = log_pi(S).gather(-1, A.view(-1, 1)).squeeze()
+
+        G = torch.zeros_like(R, device=self.t.device)
+        G[-1] = R[-1]
+        for step in range(-2, - R.shape[0] - 1, -1):
+            G[step] = R[step] + self.GAMMA * G[step + 1]
+        print(list(range(-2, - R.shape[0] - 1, -1)))
+        with torch.no_grad():
+            if self.SOFT_ON:
+                G -= self.TEMPERATURE * log_prob
+            gamma_n = torch.pow(self.GAMMA, torch.arange(R.shape[0], device=self.t.device))
+        loss = - (gamma_n * G * log_prob).mean()
+
+        OPT.zero_grad()
+        loss.backward()
+        OPT.step()
+
+        return loss.item()
+
     def train(self, seed):
 
         print("Seed=%d" % seed)
@@ -205,26 +225,8 @@ class REINFORCE(torch.nn.Module):
                 trainRs += [sum(trajectory["R"]).item()]
             else:
                 # Play an episode and log episodic reward
-
                 S, A, R = utils.envs.play_episode_tensor(env, policy, self.t)
-
-                nSteps = len(S)
-
-                G = torch.zeros(nSteps, device=self.t.device)
-                G[-1] = R[-1]
-                for step in reversed(range(nSteps - 1)):
-                    G[step] = R[step] + self.GAMMA * G[step + 1]
-
-                log_prob = log_pi(S[:-1]).gather(-1, A.view(-1, 1)).squeeze()
-                with torch.no_grad():
-                    if self.SOFT_ON:
-                        G[:-1] -= self.TEMPERATURE * log_prob
-                    gamma_n = torch.pow(self.GAMMA, torch.arange(nSteps - 1, device=self.t.device))
-                loss = - gamma_n * G[:-1] * log_pi(S[:-1]).gather(-1, A.view(-1, 1)).squeeze()
-                OPT.zero_grad()
-                loss.mean().backward()
-                OPT.step()
-
+                self.update_network(S[:-1], A, R, log_pi, OPT)
                 trainRs += [sum(R).item()]
                 # Update progress bar
             last25Rs += [sum(trainRs[-25:]) / len(trainRs[-25:])]
@@ -240,7 +242,7 @@ class REINFORCE(torch.nn.Module):
 
     def run(self, info=None, SHOW=True):
         # Train for different seeds
-        label=f"REINFORCE-{self.MODE}-γ({self.GAMMA})"
+        label = f"REINFORCE-{self.MODE}-γ({self.GAMMA})"
         if self.SVI_ON:
             label += f"-{self.PRIOR}-{self.MODEL_MODE}"
         if self.SOFT_ON:
@@ -259,7 +261,7 @@ class REINFORCE(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=8000, SEEDS=[1,2,3,4,5]).run()
+    REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=8000, SEEDS=[1, 2, 3, 4, 5]).run()
     # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99).run(SHOW=False)
     # REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1).run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
