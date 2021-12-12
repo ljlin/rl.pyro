@@ -111,7 +111,7 @@ class REINFORCE(torch.nn.Module):
         assert (isinstance(env.observation_space, gym.spaces.box.Box))
         self.OBS_N = env.observation_space.shape[0]
         self.ACT_N = env.action_space.n
-        self.unif_logits = torch.ones(self.ACT_N, device=self.t.device)
+        self.unif_logits = torch.ones(self.ACT_N, device=self.t.device).detach()
 
         self.log_pi = torch.nn.Sequential(
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
@@ -130,9 +130,8 @@ class REINFORCE(torch.nn.Module):
         return env, test_env, self.log_pi, OPT
 
     def guide(self, env=None, trajectory=None):
-        pyro.module("agentmodel", self.log_pi)
-        step = 0
-        S, A, R, D = [], [], [], []
+        pyro.module("policy_network", self.log_pi)
+        S, A, R, D, step = [], [], [], [], 0
         obs = env.reset()
         done = False
         while not done:
@@ -140,7 +139,9 @@ class REINFORCE(torch.nn.Module):
             D.append(done)
             action = pyro.sample(
                 f"action_{step}",
-                pyro.distributions.Categorical(logits=self.log_pi(self.t.f(obs)))
+                pyro.distributions.Categorical(
+                    logits=self.log_pi(self.t.f(obs))
+                )
             ).item()
             obs, reward, done, info = env.step(action)
             A.append(action)
@@ -165,7 +166,9 @@ class REINFORCE(torch.nn.Module):
         for step, state in enumerate(S[:-1]):
             action = pyro.sample(
                 "action_{}".format(step),
-                pyro.distributions.Categorical(logits=self.prior(state))
+                pyro.distributions.Categorical(
+                    logits=self.prior(state).detach()
+                )
             )
             pyro.factor(f"discount_{step}", self.LN_GAMMA)
             pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
@@ -175,7 +178,9 @@ class REINFORCE(torch.nn.Module):
         for step in pyro.plate("trajectory", len(R)):
             action = pyro.sample(
                 f"action_{step}",
-                pyro.distributions.Categorical(logits=self.prior(S[step]))
+                pyro.distributions.Categorical(
+                    logits=self.prior(S[step]).detach()
+                )
             )
             pyro.factor(f"discount_{step}", self.LN_GAMMA)
             pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
@@ -220,7 +225,7 @@ class REINFORCE(torch.nn.Module):
         pbar = tqdm.trange(self.EPISODES)
         for epi in pbar:
             if self.SVI_ON:
-                trajectory = {"S": None, "R": None}
+                trajectory = {}
                 OPT.step(env, trajectory=trajectory)
                 trainRs += [sum(trajectory["R"]).item()]
             else:
@@ -261,10 +266,10 @@ class REINFORCE(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=8000, SEEDS=[1, 2, 3, 4, 5]).run()
+    # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=8000, SEEDS=[1, 2, 3, 4, 5]).run()
     # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99).run(SHOW=False)
     # REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1).run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
-    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
+    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)

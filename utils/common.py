@@ -27,6 +27,10 @@ def update(target, source):
     for tp, p in zip(target.parameters(), source.parameters()):
         tp.data.copy_(p.data)
 
+def soft_update(target, source, tau = 0.005):
+	for tp, p in zip(target.parameters(), source.parameters()):
+		tp.data.copy_(tp.data * (1-tau) + p.data * tau)
+
 def train_and_plot(train, SEEDS, filename, label, x, show = False):
     curves = [train(seed) for seed in SEEDS]
     with open(f'{filename}.csv', 'w') as csv:

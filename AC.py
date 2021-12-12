@@ -242,6 +242,7 @@ class AC(torch.nn.Module):
                 # gamma_n = torch.pow(self.GAMMA, N)
                 loss_policy = - (
                     advantage *
+                    # gamma_n *
                     log_pi(S).gather(-1, A.view(-1, 1)).squeeze()
                 ).mean()
             OPT_Pi.zero_grad()
@@ -250,7 +251,8 @@ class AC(torch.nn.Module):
 
         # Update target network every few steps
         if epi % self.TARGET_UPDATE_FREQ == 0:
-            utils.common.update(Qt, Q)
+            utils.common.soft_update(Qt,Q)
+        # utils.common.soft_update(Qt, Q)
 
         return loss.item()
 
@@ -324,7 +326,8 @@ class AC(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, SEEDS=[1]).run()
+    AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=300, SEEDS=[1,2,3,4,5]).run("EPISODES(300)-gamma-n")
+    # AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, SEEDS=[1]).run()
     # AC("soft", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, SEEDS=[1]).run()
     # AC("hard", ENV_NAME="CartPole-v0", GAMMA=1).run(SHOW=False)
     # AC("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, SEEDS=[1]).run(SHOW=False)
