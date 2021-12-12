@@ -24,6 +24,6 @@ class ReplayBuffer:
             return t.f(S), t.l(A), t.f(R), t.f(S2), t.i(D)
         elif len(res) == 6:
             S, A, R, S2, D, N = res
-            return t.f(S), t.l(A), t.f(R), t.f(S2), t.i(D), t.i(N)
+            return t.f(S), t.l(A), t.f(R), t.f(S2), t.i(D), t.l(N)
         else:
             assert (False)

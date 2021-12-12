@@ -15,6 +15,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+
 class AC(torch.nn.Module):
     """
     CS885 Fall 2021 - Reinforcement Learning
@@ -97,7 +98,7 @@ class AC(torch.nn.Module):
         assert (self.SVI_ON == (PRIOR is not None))
         assert (self.SVI_ON == (SVI_EPOCHS is not None))
         if self.SVI_ON:
-            assert(PRIOR is not None)
+            assert (PRIOR is not None)
             self.PRIOR = PRIOR
             self.model = getattr(self, f"model_{PRIOR}", None)
             assert (self.model is not None)
@@ -171,6 +172,10 @@ class AC(torch.nn.Module):
         log_out = self.log_pi(input)
         return torch.exp(log_out)
 
+    # def pi_and_log_pi(self, input):
+    #     log_out = self.log_pi(input)
+    #     return torch.exp(log_out), log_out
+
     def guide(self, S):
         pyro.module("agent", self.log_pi)
         with pyro.plate("batch", S.shape[0], device=self.t.device):
@@ -223,19 +228,20 @@ class AC(torch.nn.Module):
                     torch.nn.functional.log_softmax(Qt(S).detach() / self.TEMPERATURE, dim=-1),
                     self.pi(S),
                     reduction='batchmean'
-                ) # [torch.nn.functional.kl_div] input: log x, target: y, ret: y * (log y - log x)
+                )  # [torch.nn.functional.kl_div] input: log x, target: y, ret: y * (log y - log x)
+                # prob, log_prob = self.pi_and_log_pi(S)
+                # log_softmax = torch.nn.functional.log_softmax(Qt(S).detach() / self.TEMPERATURE, dim=-1)
+                # loss_policy = (prob * (log_prob - log_softmax)).sum(dim=-1).mean(dim=0)
             else:
-                with torch.no_grad():
-                    adv = (
-                        R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (self.pi(S) * Qt(S)).sum(-1) #slides
-                        # (R + self.GAMMA * Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()) - Qt(S).gather(1, A.view(-1, 1)).squeeze() #?
-                        # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - Qt(S).gather(1, A.view(-1, 1)).squeeze()
-                        # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - (pi(S) * Qt(S)).sum(-1)
-                    )
-                    gmma_n = torch.pow(self.GAMMA, N)
+                advantage = (
+                    R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (self.pi(S) * Qt(S)).sum(-1)  # slides
+                    # (R + self.GAMMA * Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()) - Qt(S).gather(1, A.view(-1, 1)).squeeze() #?
+                    # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - Qt(S).gather(1, A.view(-1, 1)).squeeze()
+                    # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - (pi(S) * Qt(S)).sum(-1)
+                ).detach()
+                # gamma_n = torch.pow(self.GAMMA, N)
                 loss_policy = - (
-                    adv *
-                    gmma_n *
+                    advantage *
                     log_pi(S).gather(-1, A.view(-1, 1)).squeeze()
                 ).mean()
             OPT_Pi.zero_grad()
@@ -296,9 +302,9 @@ class AC(torch.nn.Module):
 
         return last25testRs
 
-    def run(self, info=None, SHOW = True):
+    def run(self, info=None, SHOW=True):
         # Train for different seeds
-        label=f"AC-{self.MODE}-γ({self.GAMMA})"
+        label = f"AC-{self.MODE}-γ({self.GAMMA})"
         if self.SVI_ON:
             label += f"-{self.PRIOR}"
         if self.SOFT_ON:
@@ -316,8 +322,11 @@ class AC(torch.nn.Module):
             SHOW
         )
 
+
 if __name__ == "__main__":
-    AC("hard", ENV_NAME="CartPole-v0", GAMMA=1).run(SHOW=False)
+    AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, SEEDS=[1]).run()
+    # AC("soft", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, SEEDS=[1]).run()
+    # AC("hard", ENV_NAME="CartPole-v0", GAMMA=1).run(SHOW=False)
     # AC("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, SEEDS=[1]).run(SHOW=False)
     # AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", SVI_EPOCHS = 1).run(SHOW=False)
     # AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="softmaxQ", SVI_EPOCHS = 1).run(SHOW=False)

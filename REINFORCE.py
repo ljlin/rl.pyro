@@ -187,7 +187,7 @@ class REINFORCE(torch.nn.Module):
         G[-1] = R[-1]
         for step in range(-2, - R.shape[0] - 1, -1):
             G[step] = R[step] + self.GAMMA * G[step + 1]
-        print(list(range(-2, - R.shape[0] - 1, -1)))
+
         with torch.no_grad():
             if self.SOFT_ON:
                 G -= self.TEMPERATURE * log_prob
