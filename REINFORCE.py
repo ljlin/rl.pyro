@@ -113,21 +113,31 @@ class REINFORCE(torch.nn.Module):
         self.ACT_N = env.action_space.n
         self.unif_logits = torch.ones(self.ACT_N, device=self.t.device).detach()
 
-        self.log_pi = torch.nn.Sequential(
-            torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
-            torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
-            torch.nn.Linear(self.HIDDEN, self.ACT_N),
-            torch.nn.LogSoftmax(dim=-1)
-        ).to(self.DEVICE)
-        self.log_pi.apply(utils.torch.init_weights)
+        if self.SOFT_ON:
+            self.log_pi = torch.nn.Sequential(
+                torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
+                torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
+                torch.nn.Linear(self.HIDDEN, self.ACT_N),
+                torch.nn.LogSoftmax(dim=-1)
+            ).to(self.DEVICE)
+            self.log_pi.apply(utils.torch.init_weights)
+        else:
+            self.pi = torch.nn.Sequential(
+                torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
+                torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
+                torch.nn.Linear(self.HIDDEN, self.ACT_N),
+                torch.nn.Softmax(dim=-1)
+            ).to(self.DEVICE)
 
         if self.SVI_ON:
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
             OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
-        else:
+        elif self.SOFT_ON:
             OPT = torch.optim.Adam(self.log_pi.parameters(), lr=self.LEARNING_RATE)
+        else:
+            OPT = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
 
-        return env, test_env, self.log_pi, OPT
+        return env, test_env, self.log_pi if self.SOFT_ON else self.pi, OPT
 
     def guide(self, env=None, trajectory=None):
         pyro.module("policy_network", self.log_pi)
@@ -185,8 +195,11 @@ class REINFORCE(torch.nn.Module):
             pyro.factor(f"discount_{step}", self.LN_GAMMA)
             pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
 
-    def update_network(self, S, A, R, log_pi, OPT):
-        log_prob = log_pi(S).gather(-1, A.view(-1, 1)).squeeze()
+    def update_network(self, S, A, R, policy_net, OPT):
+        if self.SOFT_ON:
+            log_prob = policy_net(S).gather(-1, A.view(-1, 1)).squeeze()
+        else:
+            log_prob = policy_net(S).gather(-1, A.view(-1, 1)).squeeze().log()
 
         G = torch.zeros_like(R, device=self.t.device)
         G[-1] = R[-1]
@@ -208,7 +221,7 @@ class REINFORCE(torch.nn.Module):
     def train(self, seed):
 
         print("Seed=%d" % seed)
-        env, test_env, log_pi, OPT = self.create_everything(seed)
+        env, test_env, policy_net, OPT = self.create_everything(seed)
 
         if self.SVI_ON:
             pyro.clear_param_store()
@@ -216,7 +229,8 @@ class REINFORCE(torch.nn.Module):
         def policy(env, obs):
             with torch.no_grad():
                 obs = self.t.f(obs).view(-1, self.OBS_N)  # Convert to torch tensor
-                action = torch.distributions.Categorical(logits=log_pi(obs)).sample().item()
+                kwargs = {"logits" if self.SOFT_ON else "probs": policy_net(obs)}
+                action = torch.distributions.Categorical(**kwargs).sample().item()
             return action
 
         trainRs = []
@@ -231,7 +245,7 @@ class REINFORCE(torch.nn.Module):
             else:
                 # Play an episode and log episodic reward
                 S, A, R = utils.envs.play_episode_tensor(env, policy, self.t)
-                self.update_network(S[:-1], A, R, log_pi, OPT)
+                self.update_network(S[:-1], A, R, policy_net, OPT)
                 trainRs += [sum(R).item()]
                 # Update progress bar
             last25Rs += [sum(trainRs[-25:]) / len(trainRs[-25:])]
@@ -266,10 +280,10 @@ class REINFORCE(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=8000, SEEDS=[1, 2, 3, 4, 5]).run()
+    REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=8000, SEEDS=[1,2,3,4,5]).run()
     # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99).run(SHOW=False)
     # REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1).run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
-    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)

@@ -250,9 +250,9 @@ class AC(torch.nn.Module):
             OPT_Pi.step()
 
         # Update target network every few steps
-        if epi % self.TARGET_UPDATE_FREQ == 0:
-            utils.common.soft_update(Qt,Q)
-        # utils.common.soft_update(Qt, Q)
+        # if epi % self.TARGET_UPDATE_FREQ == 0:
+        #     utils.common.soft_update(Qt,Q)
+        utils.common.soft_update(Qt, Q)
 
         return loss.item()
 
