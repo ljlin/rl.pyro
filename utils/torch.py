@@ -1,21 +1,28 @@
 import torch
 
+
 class TorchHelper:
-    
+
     def __init__(self):
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
         else:
             self.device = torch.device("cpu")
-    
+
     def f(self, x):
         return torch.tensor(x).float().to(self.device)
-    
+
     def i(self, x):
         return torch.tensor(x).int().to(self.device)
-    
+
     def l(self, x):
         return torch.tensor(x).long().to(self.device)
 
     def b(self, x):
         return torch.tensor(x).bool().to(self.device)
+
+
+def init_weights(net):
+    for m in net.modules():
+        if isinstance(m, torch.nn.Linear):
+            torch.nn.init.xavier_uniform_(m.weight)

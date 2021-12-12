@@ -179,16 +179,16 @@ class AC(torch.nn.Module):
     def model_unif(self, S):
         with pyro.plate("batch", S.shape[0], device=self.t.device):
             A = pyro.sample("action", pyro.distributions.Categorical(logits=self.unif_logits))
-            qvalues = self.Qt(S).detach().gather(1, A.view(-1, 1)).squeeze()
+            qvalues = self.Qt(S).gather(1, A.view(-1, 1)).squeeze().detach()
             pyro.factor("reward", qvalues / self.TEMPERATURE)
 
-    def model_softmaxQ(self, states):
-        with pyro.plate("state_batch", states.shape[0], device=self.t.device):
-            prob_action = torch.nn.functional.log_softmax(
-                self.Qt(states).detach() / self.TEMPERATURE,
+    def model_softmaxQ(self, S):
+        with pyro.plate("batch", S.shape[0], device=self.t.device):
+            probs = torch.nn.functional.softmax(
+                self.Qt(S) / self.TEMPERATURE,
                 dim=-1
-            )
-            action = pyro.sample("action", pyro.distributions.Categorical(logits=prob_action))
+            ).detach()
+            A = pyro.sample("action", pyro.distributions.Categorical(probs))
 
     # Update networks
     def update_networks(self, epi, buf, log_pi, OPT_Pi, Q, Qt, OPT_Q):
@@ -317,7 +317,7 @@ class AC(torch.nn.Module):
         )
 
 if __name__ == "__main__":
-    # AC("hard", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True).run(SHOW=False)
-    AC("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, SEEDS=[1]).run(SHOW=False)
+    AC("hard", ENV_NAME="CartPole-v0", GAMMA=1).run(SHOW=False)
+    # AC("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, SEEDS=[1]).run(SHOW=False)
     # AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", SVI_EPOCHS = 1).run(SHOW=False)
     # AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="softmaxQ", SVI_EPOCHS = 1).run(SHOW=False)

@@ -57,6 +57,7 @@ class REINFORCE(torch.nn.Module):
         self.DEVICE = self.t.device
         self.ENV_NAME = ENV_NAME
         self.GAMMA = GAMMA
+        self.LN_GAMMA = torch.log(self.t.f(self.GAMMA))
         self.MINIBATCH_SIZE = MINIBATCH_SIZE
         self.LEARNING_RATE = LEARNING_RATE
         self.HIDDEN = HIDDEN
@@ -118,6 +119,7 @@ class REINFORCE(torch.nn.Module):
             torch.nn.Linear(self.HIDDEN, self.ACT_N),
             torch.nn.LogSoftmax(dim=-1)
         ).to(self.DEVICE)
+        self.log_pi.apply(utils.torch.init_weights)
 
         if self.SVI_ON:
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
@@ -165,6 +167,7 @@ class REINFORCE(torch.nn.Module):
                 "action_{}".format(step),
                 pyro.distributions.Categorical(logits=self.prior(state))
             )
+            pyro.factor(f"discount_{step}", self.LN_GAMMA)
             pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
 
     def model_plate(self, env=None, trajectory=None):
@@ -174,6 +177,7 @@ class REINFORCE(torch.nn.Module):
                 f"action_{step}",
                 pyro.distributions.Categorical(logits=self.prior(S[step]))
             )
+            pyro.factor(f"discount_{step}", self.LN_GAMMA)
             pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
 
     def train(self, seed):
@@ -216,7 +220,7 @@ class REINFORCE(torch.nn.Module):
                     if self.SOFT_ON:
                         G[:-1] -= self.TEMPERATURE * log_prob
                     gamma_n = torch.pow(self.GAMMA, torch.arange(nSteps - 1, device=self.t.device))
-                loss = - gamma_n * G[:-1] * log_prob
+                loss = - gamma_n * G[:-1] * log_pi(S[:-1]).gather(-1, A.view(-1, 1)).squeeze()
                 OPT.zero_grad()
                 loss.mean().backward()
                 OPT.step()
@@ -255,9 +259,9 @@ class REINFORCE(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True).run(SHOW=False)
-    REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1).run(SHOW=False)
-    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
-    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
-    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
-    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)
+    # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99).run(SHOW=False)
+    # REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1).run(SHOW=False)
+    REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)
