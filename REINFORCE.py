@@ -1,8 +1,8 @@
+import warnings
+
 import gym
-import matplotlib.pyplot as plt
-import numpy
-import torch
 import pyro
+import torch
 import tqdm
 
 import utils.common
@@ -10,12 +10,10 @@ import utils.envs
 import utils.seed
 import utils.torch
 
-import warnings
-
 warnings.filterwarnings("ignore")
 
 
-class REINFORCE(torch.nn.Module):
+class REINFORCE:
     """
     CS885 Fall 2021 - Reinforcement Learning
     https://cs.uwaterloo.ca/~ppoupart/teaching/cs885-fall21/schedule.html
@@ -127,32 +125,30 @@ class REINFORCE(torch.nn.Module):
         self.unif_logits = torch.ones(self.ACT_N, device=self.DEVICE).detach()
 
         if self.USE_LOGSOFTMAX:
-            self.log_pi = torch.nn.Sequential(
+            self.policy_net = torch.nn.Sequential(
                 torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
                 torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
                 torch.nn.Linear(self.HIDDEN, self.ACT_N),
                 torch.nn.LogSoftmax(dim=-1)
             ).to(self.DEVICE)
-            policy_net = self.log_pi
         else:
-            self.pi = torch.nn.Sequential(
+            self.policy_net = torch.nn.Sequential(
                 torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
                 torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
                 torch.nn.Linear(self.HIDDEN, self.ACT_N),
                 torch.nn.Softmax(dim=-1)
             ).to(self.DEVICE)
-            policy_net = self.pi
 
         if self.SVI_ON:
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
             OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
         else:
-            OPT = torch.optim.Adam(policy_net.parameters(), lr=self.LEARNING_RATE)
+            OPT = torch.optim.Adam(self.policy_net.parameters(), lr=self.LEARNING_RATE)
 
-        return env, test_env, policy_net, OPT
+        return env, test_env, self.policy_net, OPT
 
     def guide(self, env=None, trajectory=None):
-        pyro.module("policy_network", self.log_pi)
+        pyro.module("policy_network", self.policy_net)
         S, A, R, D, step = [], [], [], [], 0
         obs = env.reset()
         done = False
@@ -162,10 +158,10 @@ class REINFORCE(torch.nn.Module):
             action = pyro.sample(
                 f"action_{step}",
                 pyro.distributions.Categorical(
-                    logits=self.log_pi(self.t.f(obs))
+                    logits=self.policy_net(self.t.f(obs))
                 )
             ).item()
-            obs, reward, done, info = env.step(action)
+            obs, reward, done, _ = env.step(action)
             A.append(action)
             R.append(reward)
             step += 1
@@ -178,7 +174,7 @@ class REINFORCE(torch.nn.Module):
         trajectory["D"] = self.t.b(D)
 
     def prior_pi(self, state):
-        return self.log_pi(state)
+        return self.policy_net(state)
 
     def prior_unif(self, state):
         return self.unif_logits
@@ -292,10 +288,11 @@ class REINFORCE(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=8000, SEEDS=[1,2,3,4,5]).run()
+    pass
+    # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=8000, SEEDS=[1,2,3,4,5]).run()
     # REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA=0.99).run(SHOW=False)
     # REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1).run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
-    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
+    # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, LEARNING_RATE=10e-4, PRIOR="unif", MODEL_MODE="sequential").run()
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="plate").run(SHOW=False)
     # REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, PRIOR="pi", MODEL_MODE="sequential").run(SHOW=False)

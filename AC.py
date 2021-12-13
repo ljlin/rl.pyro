@@ -1,22 +1,20 @@
+import warnings
+
 import gym
-import matplotlib.pyplot as plt
-import numpy
-import torch
 import pyro
+import torch
 import tqdm
 
+import utils.buffers
 import utils.common
 import utils.envs
 import utils.seed
 import utils.torch
-import utils.buffers
-
-import warnings
 
 warnings.filterwarnings("ignore")
 
 
-class AC(torch.nn.Module):
+class AC:
     """
     CS885 Fall 2021 - Reinforcement Learning
     https://cs.uwaterloo.ca/~ppoupart/teaching/cs885-fall21/schedule.html
@@ -200,7 +198,7 @@ class AC(torch.nn.Module):
         # Sample a minibatch (s, a, r, s', d)
         # Each variable is a vector of corresponding values
         S, A, R, S_prime, D, N = buf.sample(self.MINIBATCH_SIZE, self.t)
-        probs_S,       log_probs_S       = self.policy_net(S)
+        probs_S, log_probs_S = self.policy_net(S)
         probs_S_prime, log_probs_S_prime = self.policy_net(S_prime)
         dist = torch.distributions.Categorical(logits=log_probs_S_prime)
 
@@ -238,16 +236,16 @@ class AC(torch.nn.Module):
             else:
                 with torch.no_grad():
                     advantage = (
-                        R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (probs_S * Qt(S)).sum(-1)  # slides
+                            R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (probs_S * Qt(S)).sum(-1)  # slides
                         # (R + self.GAMMA * Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()) - Qt(S).gather(1, A.view(-1, 1)).squeeze() #?
                         # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - Qt(S).gather(1, A.view(-1, 1)).squeeze()
                         # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - (pi(S) * Qt(S)).sum(-1)
                     )
                     gamma_n = torch.pow(self.GAMMA, N)
                 loss_policy = - (
-                    advantage *
-                    gamma_n *
-                    log_probs_S.gather(-1, A.view(-1, 1)).squeeze()
+                        advantage *
+                        gamma_n *
+                        log_probs_S.gather(-1, A.view(-1, 1)).squeeze()
                 ).mean()
             OPT_policy.zero_grad()
             loss_policy.backward()
@@ -332,8 +330,9 @@ class AC(torch.nn.Module):
 
 
 if __name__ == "__main__":
+    pass
     # AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=300, SEEDS=[1,2,3,4,5]).run("EPISODES(300)-gamma-n")
-    AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, SEEDS=[1]).run()
+    # AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, SEEDS=[1]).run()
     # AC("soft", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, SEEDS=[1]).run("gamma-mannuallog")
     # AC("hard", ENV_NAME="CartPole-v0", GAMMA=1).run(SHOW=False)
     # AC("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, SEEDS=[1]).run(SHOW=False)
