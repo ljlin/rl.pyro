@@ -139,20 +139,20 @@ class AC(torch.nn.Module):
         self.ACT_N = env.action_space.n
         self.unif_logits = torch.ones(self.MINIBATCH_SIZE, self.ACT_N, device=self.t.device)
 
-        self.log_pi = torch.nn.Sequential(
+        self.policy_net = torch.nn.Sequential(
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
             torch.nn.Linear(self.HIDDEN, self.ACT_N),
-            torch.nn.LogSoftmax(dim=-1)
+            utils.torch.LogSoftmax()
         ).to(self.DEVICE)
 
         buf = utils.buffers.ReplayBuffer(self.BUFSIZE)
 
         if self.SVI_ON:
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
-            OPT_pi = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
+            OPT_policy = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
         else:
-            OPT_pi = torch.optim.Adam(self.log_pi.parameters(), lr=self.LEARNING_RATE)
+            OPT_policy = torch.optim.Adam(self.policy_net.parameters(), lr=self.LEARNING_RATE)
 
         self.Q = torch.nn.Sequential(
             torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
@@ -166,18 +166,18 @@ class AC(torch.nn.Module):
         ).to(self.DEVICE)
 
         OPT_Q = torch.optim.Adam(self.Q.parameters(), lr=self.LEARNING_RATE)
-        return env, test_env, buf, self.pi, OPT_pi, self.Q, self.Qt, OPT_Q
+        return env, test_env, buf, self.policy_net, OPT_policy, self.Q, self.Qt, OPT_Q
 
     def pi(self, input):
-        log_out = self.log_pi(input)
-        return torch.exp(log_out)
+        probs, log_probs = self.policy_net(input)
+        return probs
 
-    # def pi_and_log_pi(self, input):
-    #     log_out = self.log_pi(input)
-    #     return torch.exp(log_out), log_out
+    def log_pi(self, input):
+        probs, log_probs = self.policy_net(input)
+        return log_probs
 
     def guide(self, S):
-        pyro.module("agent", self.log_pi)
+        pyro.module("agent", self.policy_net)
         with pyro.plate("batch", S.shape[0], device=self.t.device):
             A = pyro.sample("action", pyro.distributions.Categorical(logits=self.log_pi(S)))
 
@@ -196,11 +196,14 @@ class AC(torch.nn.Module):
             A = pyro.sample("action", pyro.distributions.Categorical(probs))
 
     # Update networks
-    def update_networks(self, epi, buf, log_pi, OPT_Pi, Q, Qt, OPT_Q):
+    def update_networks(self, epi, buf, policy_net, OPT_policy, Q, Qt, OPT_Q):
         # Sample a minibatch (s, a, r, s', d)
         # Each variable is a vector of corresponding values
         S, A, R, S_prime, D, N = buf.sample(self.MINIBATCH_SIZE, self.t)
-        dist = torch.distributions.Categorical(logits=log_pi(S_prime))
+        probs_S,       log_probs_S       = self.policy_net(S)
+        probs_S_prime, log_probs_S_prime = self.policy_net(S_prime)
+        dist = torch.distributions.Categorical(logits=log_probs_S_prime)
+
         A_prime = dist.sample()
         qvalues = Q(S).gather(1, A.view(-1, 1)).squeeze()
         q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
@@ -221,33 +224,34 @@ class AC(torch.nn.Module):
         # E Step
         if self.SVI_ON:
             for epoch in range(self.SVI_EPOCHS):
-                OPT_Pi.step(S)
+                OPT_policy.step(S)
         else:
             if self.SOFT_ON:
                 loss_policy = torch.nn.functional.kl_div(
                     torch.nn.functional.log_softmax(Qt(S).detach() / self.TEMPERATURE, dim=-1),
-                    self.pi(S),
+                    probs_S,
                     reduction='batchmean'
                 )  # [torch.nn.functional.kl_div] input: log x, target: y, ret: y * (log y - log x)
                 # prob, log_prob = self.pi_and_log_pi(S)
                 # log_softmax = torch.nn.functional.log_softmax(Qt(S).detach() / self.TEMPERATURE, dim=-1)
                 # loss_policy = (prob * (log_prob - log_softmax)).sum(dim=-1).mean(dim=0)
             else:
-                advantage = (
-                    R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (self.pi(S) * Qt(S)).sum(-1)  # slides
-                    # (R + self.GAMMA * Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()) - Qt(S).gather(1, A.view(-1, 1)).squeeze() #?
-                    # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - Qt(S).gather(1, A.view(-1, 1)).squeeze()
-                    # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - (pi(S) * Qt(S)).sum(-1)
-                ).detach()
-                # gamma_n = torch.pow(self.GAMMA, N)
+                with torch.no_grad():
+                    advantage = (
+                        R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (probs_S * Qt(S)).sum(-1)  # slides
+                        # (R + self.GAMMA * Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()) - Qt(S).gather(1, A.view(-1, 1)).squeeze() #?
+                        # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - Qt(S).gather(1, A.view(-1, 1)).squeeze()
+                        # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - (pi(S) * Qt(S)).sum(-1)
+                    )
+                    gamma_n = torch.pow(self.GAMMA, N)
                 loss_policy = - (
                     advantage *
-                    # gamma_n *
-                    log_pi(S).gather(-1, A.view(-1, 1)).squeeze()
+                    gamma_n *
+                    log_probs_S.gather(-1, A.view(-1, 1)).squeeze()
                 ).mean()
-            OPT_Pi.zero_grad()
+            OPT_policy.zero_grad()
             loss_policy.backward()
-            OPT_Pi.step()
+            OPT_policy.step()
 
         # Update target network every few steps
         # if epi % self.TARGET_UPDATE_FREQ == 0:
@@ -259,7 +263,7 @@ class AC(torch.nn.Module):
     def train(self, seed):
 
         print("Seed=%d" % seed)
-        env, test_env, buf, log_pi, OPT_pi, Q, Qt, OPT_Q = self.create_everything(seed)
+        env, test_env, buf, policy_net, OPT_policy, Q, Qt, OPT_Q = self.create_everything(seed)
 
         if self.SVI_ON:
             pyro.clear_param_store()
@@ -267,7 +271,9 @@ class AC(torch.nn.Module):
         def policy(env, obs):
             with torch.no_grad():
                 obs = self.t.f(obs).view(-1, self.OBS_N)  # Convert to torch tensor
-                action = torch.distributions.Categorical(logits=log_pi(obs)).sample().item()
+                action = torch.distributions.Categorical(
+                    logits=self.log_pi(obs)
+                ).sample().item()
             return action
 
         testRs = []
@@ -284,7 +290,7 @@ class AC(torch.nn.Module):
 
                 # Train for TRAIN_EPOCHS
                 for tri in range(self.TRAIN_EPOCHS):
-                    self.update_networks(epi, buf, log_pi, OPT_pi, Q, Qt, OPT_Q)
+                    self.update_networks(epi, buf, policy_net, OPT_policy, Q, Qt, OPT_Q)
 
             # Evaluate for TEST_EPISODES number of episodes
             Rews = []
@@ -326,9 +332,9 @@ class AC(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=300, SEEDS=[1,2,3,4,5]).run("EPISODES(300)-gamma-n")
-    # AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, SEEDS=[1]).run()
-    # AC("soft", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, SEEDS=[1]).run()
+    # AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, EPISODES=300, SEEDS=[1,2,3,4,5]).run("EPISODES(300)-gamma-n")
+    AC("hard", ENV_NAME="CartPole-v0", GAMMA=0.99, SEEDS=[1]).run()
+    # AC("soft", ENV_NAME="CartPole-v0", GAMMA=0.99, TEMPERATURE=1, SEEDS=[1]).run("gamma-mannuallog")
     # AC("hard", ENV_NAME="CartPole-v0", GAMMA=1).run(SHOW=False)
     # AC("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, SEEDS=[1]).run(SHOW=False)
     # AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", SVI_EPOCHS = 1).run(SHOW=False)

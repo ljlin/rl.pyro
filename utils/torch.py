@@ -28,3 +28,21 @@ def init_weights(net):
     for m in net.modules():
         if isinstance(m, torch.nn.Linear):
             torch.nn.init.xavier_uniform_(m.weight)
+
+class Clamp(torch.nn.Module):
+    def __init__(self, max, min):
+        super().__init__()
+        self.max = max
+        self.min = min
+
+    def forward(self, input):
+        return torch.clamp(input, max=self.max, min = self.min)
+
+class LogSoftmax(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, logits):
+        probs = torch.nn.functional.softmax(logits, dim=-1)
+        log_probs = logits - torch.logsumexp(logits, dim=-1).view(-1,1)
+        return probs, log_probs
