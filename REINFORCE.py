@@ -49,12 +49,18 @@ class REINFORCE(torch.nn.Module):
             # Total number of episodes to learn over
             TEMPERATURE=None,
             PRIOR=None,
-            MODEL_MODE=None
+            MODEL_MODE=None,
+            USE_LOGSOFTMAX_FOR_HARD=None,
+            DEVICE=None
     ):
         super().__init__()
-        self.t = utils.torch.TorchHelper()
-        # Constants
-        self.DEVICE = self.t.device
+        if DEVICE:
+            self.t = utils.torch.TorchHelper(DEVICE)
+            self.DEVICE = DEVICE
+        else:
+            self.t = utils.torch.TorchHelper()
+            self.DEVICE = self.t.device
+
         self.ENV_NAME = ENV_NAME
         self.GAMMA = GAMMA
         self.LN_GAMMA = torch.log(self.t.f(self.GAMMA))
@@ -88,6 +94,9 @@ class REINFORCE(torch.nn.Module):
             self.model = getattr(self, f"model_{MODEL_MODE}", None)
             assert (self.model is not None)
 
+        assert ((USE_LOGSOFTMAX_FOR_HARD is not None) <= self.SOFT_OFF)
+        self.USE_LOGSOFTMAX_FOR_HARD = USE_LOGSOFTMAX_FOR_HARD
+
     @property
     def SVI_ON(self):
         return self.MODE == "pyro"
@@ -100,6 +109,10 @@ class REINFORCE(torch.nn.Module):
     def SOFT_OFF(self):
         return self.MODE == "hard"
 
+    @property
+    def USE_LOGSOFTMAX(self):
+        return self.SOFT_ON or self.USE_LOGSOFTMAX_FOR_HARD
+
     def create_everything(self, seed):
         utils.seed.seed(seed)
         env = gym.make(self.ENV_NAME)
@@ -111,16 +124,16 @@ class REINFORCE(torch.nn.Module):
         assert (isinstance(env.observation_space, gym.spaces.box.Box))
         self.OBS_N = env.observation_space.shape[0]
         self.ACT_N = env.action_space.n
-        self.unif_logits = torch.ones(self.ACT_N, device=self.t.device).detach()
+        self.unif_logits = torch.ones(self.ACT_N, device=self.DEVICE).detach()
 
-        if self.SOFT_ON:
+        if self.USE_LOGSOFTMAX:
             self.log_pi = torch.nn.Sequential(
                 torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
                 torch.nn.Linear(self.HIDDEN, self.HIDDEN), torch.nn.ReLU(),
                 torch.nn.Linear(self.HIDDEN, self.ACT_N),
                 torch.nn.LogSoftmax(dim=-1)
             ).to(self.DEVICE)
-            self.log_pi.apply(utils.torch.init_weights)
+            policy_net = self.log_pi
         else:
             self.pi = torch.nn.Sequential(
                 torch.nn.Linear(self.OBS_N, self.HIDDEN), torch.nn.ReLU(),
@@ -128,16 +141,15 @@ class REINFORCE(torch.nn.Module):
                 torch.nn.Linear(self.HIDDEN, self.ACT_N),
                 torch.nn.Softmax(dim=-1)
             ).to(self.DEVICE)
+            policy_net = self.pi
 
         if self.SVI_ON:
             adma = pyro.optim.Adam({"lr": self.LEARNING_RATE})
             OPT = pyro.infer.SVI(self.model, self.guide, adma, loss=pyro.infer.Trace_ELBO())
-        elif self.SOFT_ON:
-            OPT = torch.optim.Adam(self.log_pi.parameters(), lr=self.LEARNING_RATE)
         else:
-            OPT = torch.optim.Adam(self.pi.parameters(), lr=self.LEARNING_RATE)
+            OPT = torch.optim.Adam(policy_net.parameters(), lr=self.LEARNING_RATE)
 
-        return env, test_env, self.log_pi if self.SOFT_ON else self.pi, OPT
+        return env, test_env, policy_net, OPT
 
     def guide(self, env=None, trajectory=None):
         pyro.module("policy_network", self.log_pi)
@@ -196,12 +208,12 @@ class REINFORCE(torch.nn.Module):
             pyro.factor(f"reward_{step}", R[step] / self.TEMPERATURE)
 
     def update_network(self, S, A, R, policy_net, OPT):
-        if self.SOFT_ON:
+        if self.USE_LOGSOFTMAX:
             log_prob = policy_net(S).gather(-1, A.view(-1, 1)).squeeze()
         else:
             log_prob = policy_net(S).gather(-1, A.view(-1, 1)).squeeze().log()
 
-        G = torch.zeros_like(R, device=self.t.device)
+        G = torch.zeros_like(R, device=self.DEVICE)
         G[-1] = R[-1]
         for step in range(-2, - R.shape[0] - 1, -1):
             G[step] = R[step] + self.GAMMA * G[step + 1]
@@ -209,7 +221,7 @@ class REINFORCE(torch.nn.Module):
         with torch.no_grad():
             if self.SOFT_ON:
                 G -= self.TEMPERATURE * log_prob
-            gamma_n = torch.pow(self.GAMMA, torch.arange(R.shape[0], device=self.t.device))
+            gamma_n = torch.pow(self.GAMMA, torch.arange(R.shape[0], device=self.DEVICE))
         loss = - (gamma_n * G * log_prob).mean()
 
         OPT.zero_grad()
@@ -229,7 +241,7 @@ class REINFORCE(torch.nn.Module):
         def policy(env, obs):
             with torch.no_grad():
                 obs = self.t.f(obs).view(-1, self.OBS_N)  # Convert to torch tensor
-                kwargs = {"logits" if self.SOFT_ON else "probs": policy_net(obs)}
+                kwargs = {"logits" if self.USE_LOGSOFTMAX else "probs": policy_net(obs)}
                 action = torch.distributions.Categorical(**kwargs).sample().item()
             return action
 

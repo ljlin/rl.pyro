@@ -3,8 +3,10 @@ import torch
 
 class TorchHelper:
 
-    def __init__(self):
-        if torch.cuda.is_available():
+    def __init__(self, DEVICE=None):
+        if DEVICE:
+            self.device = DEVICE
+        elif torch.cuda.is_available():
             self.device = torch.device("cuda")
         else:
             self.device = torch.device("cpu")

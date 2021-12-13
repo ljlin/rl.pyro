@@ -5,6 +5,7 @@ import AC
 class Test(TestCase):
     def test_reinforce(self):
         REINFORCE.REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True).run(SHOW=False)
+        REINFORCE.REINFORCE("hard", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, DEVICE="cpu").run(SHOW=False)
         REINFORCE.REINFORCE("soft", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1).run(SHOW=False)
         REINFORCE.REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="plate").run(SHOW=False)
         REINFORCE.REINFORCE("pyro", ENV_NAME="CartPole-v0", GAMMA = 1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", MODEL_MODE="sequential").run(SHOW=False)
