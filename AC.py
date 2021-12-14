@@ -182,7 +182,7 @@ class AC:
     def model_unif(self, S):
         with pyro.plate("batch", S.shape[0], device=self.t.device):
             A = pyro.sample("action", pyro.distributions.Categorical(logits=self.unif_logits))
-            qvalues = self.Qt(S).gather(1, A.view(-1, 1)).squeeze().detach()
+            qvalues = self.Qt(S).gather(index=A.view(-1, 1), dim=-1).squeeze()
             pyro.factor("reward", qvalues / self.TEMPERATURE)
 
     def model_softmaxQ(self, S):
@@ -190,7 +190,7 @@ class AC:
             probs = torch.nn.functional.softmax(
                 self.Qt(S) / self.TEMPERATURE,
                 dim=-1
-            ).detach()
+            )
             A = pyro.sample("action", pyro.distributions.Categorical(probs))
 
     # Update networks
@@ -203,11 +203,11 @@ class AC:
         dist = torch.distributions.Categorical(logits=log_probs_S_prime)
 
         A_prime = dist.sample()
-        qvalues = Q(S).gather(1, A.view(-1, 1)).squeeze()
-        q_prime_values = Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()
+        qvalues = Q(S).gather(index=A.view(-1, 1), dim=-1).squeeze()
+        q_prime_values = Qt(S_prime).gather(index=A_prime.view(-1, 1), dim=-1).squeeze()
 
         # M Step
-        entropy_term = (self.SVI_OFF) and (self.SOFT_ON)
+        entropy_term = self.SOFT_ON
         if entropy_term:
             entropy = torch.mean(dist.entropy())
             targets = R + self.GAMMA * (q_prime_values + self.TEMPERATURE * entropy) * (1 - D)
@@ -236,26 +236,25 @@ class AC:
             else:
                 with torch.no_grad():
                     advantage = (
-                            R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (probs_S * Qt(S)).sum(-1)  # slides
+                        R + self.GAMMA * self.Qt(S_prime).max(-1)[0] - (probs_S * Qt(S)).sum(-1)  # slides
                         # (R + self.GAMMA * Qt(S_prime).gather(1, A_prime.view(-1, 1)).squeeze()) - Qt(S).gather(1, A.view(-1, 1)).squeeze() #?
                         # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - Qt(S).gather(1, A.view(-1, 1)).squeeze()
                         # (R + self.GAMMA * (pi(S_prime) * Qt(S_prime)).sum(-1)) - (pi(S) * Qt(S)).sum(-1)
                     )
                     gamma_n = torch.pow(self.GAMMA, N)
                 loss_policy = - (
-                        advantage *
-                        gamma_n *
-                        log_probs_S.gather(-1, A.view(-1, 1)).squeeze()
+                    advantage *
+                    gamma_n *
+                    log_probs_S.gather(index=A.view(-1, 1), dim=-1).squeeze()
                 ).mean()
             OPT_policy.zero_grad()
             loss_policy.backward()
             OPT_policy.step()
 
         # Update target network every few steps
-        # if epi % self.TARGET_UPDATE_FREQ == 0:
-        #     utils.common.soft_update(Qt,Q)
-        utils.common.soft_update(Qt, Q)
-
+        if epi % self.TARGET_UPDATE_FREQ == 0:
+            utils.common.soft_update(Qt,Q)
+        # utils.common.soft_update(Qt, Q)
         return loss.item()
 
     def train(self, seed):

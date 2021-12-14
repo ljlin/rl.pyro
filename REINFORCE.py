@@ -185,7 +185,7 @@ class REINFORCE:
             action = pyro.sample(
                 "action_{}".format(step),
                 pyro.distributions.Categorical(
-                    logits=self.prior(state).detach()
+                    logits=self.prior(state)
                 )
             )
             pyro.factor(f"discount_{step}", self.LN_GAMMA)
@@ -197,7 +197,7 @@ class REINFORCE:
             action = pyro.sample(
                 f"action_{step}",
                 pyro.distributions.Categorical(
-                    logits=self.prior(S[step]).detach()
+                    logits=self.prior(S[step])
                 )
             )
             pyro.factor(f"discount_{step}", self.LN_GAMMA)
