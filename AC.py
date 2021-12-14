@@ -59,8 +59,9 @@ class AC:
             # Replay buffer size
             TEST_EPISODES=1,
             # Test episodes after every train episode
-            TARGET_UPDATE_FREQ=10,
+            TARGET_UPDATE_FREQ=None,
             # Target network update frequency
+            TARGET_UPDATE_TAU=0.005,
             SVI_EPOCHS=None,
     ):
         super().__init__()
@@ -78,12 +79,16 @@ class AC:
             self.SEEDS = [1, 2]
             self.EPISODES = 20
             self.TRAIN_AFTER_EPISODES = 10
-            self.TARGET_UPDATE_FREQ = 5
         else:
             self.SEEDS = SEEDS
             self.EPISODES = EPISODES
             self.TRAIN_AFTER_EPISODES = TRAIN_AFTER_EPISODES
+
+        assert ((TARGET_UPDATE_FREQ is None) == (TARGET_UPDATE_TAU is not None))
+        if TARGET_UPDATE_FREQ:
             self.TARGET_UPDATE_FREQ = TARGET_UPDATE_FREQ
+        else:
+            self.TARGET_UPDATE_TAU = TARGET_UPDATE_TAU
 
         self.TRAIN_EPOCHS = TRAIN_EPOCHS
         self.BUFSIZE = BUFSIZE
@@ -252,9 +257,12 @@ class AC:
             OPT_policy.step()
 
         # Update target network every few steps
-        if epi % self.TARGET_UPDATE_FREQ == 0:
-            utils.common.soft_update(Qt,Q)
-        # utils.common.soft_update(Qt, Q)
+        if getattr(self, "TARGET_UPDATE_FREQ", None):
+            if epi % self.TARGET_UPDATE_FREQ == 0:
+                utils.common.soft_update(Qt,Q)
+        else:
+            utils.common.soft_update(Qt, Q, self.TARGET_UPDATE_TAU)
+
         return loss.item()
 
     def train(self, seed):
