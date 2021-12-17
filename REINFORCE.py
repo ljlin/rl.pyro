@@ -231,9 +231,6 @@ class REINFORCE:
         print("Seed=%d" % seed)
         env, test_env, policy_net, OPT = self.create_everything(seed)
 
-        if self.SVI_ON:
-            pyro.clear_param_store()
-
         def policy(env, obs):
             with torch.no_grad():
                 obs = self.t.f(obs).view(-1, self.OBS_N)  # Convert to torch tensor
@@ -277,8 +274,13 @@ class REINFORCE:
         filename = utils.common.safe_filename(
             f"{label}-{self.ENV_NAME}{'-' + info + '-' if info else '-'}SEED({self.SEEDS})")
         print(filename)
+
+        def train(seed):
+            with pyro.get_param_store().scope():
+                return self.train(seed)
+
         utils.common.train_and_plot(
-            self.train,
+            train,
             self.SEEDS,
             filename,
             label,
