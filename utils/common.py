@@ -31,7 +31,7 @@ def soft_update(target, source, tau = 0.005):
 	for tp, p in zip(target.parameters(), source.parameters()):
 		tp.data.copy_(tp.data * (1-tau) + p.data * tau)
 
-def train_and_plot(train, SEEDS, filename, label, x, show = False):
+def train_and_plot(train, SEEDS, filename, label, x, show = False, ext="png"):
     curves = [train(seed) for seed in SEEDS]
     with open(f'{filename}.csv', 'w') as csv:
         numpy.savetxt(csv, numpy.asarray(curves), delimiter=',')
@@ -39,6 +39,27 @@ def train_and_plot(train, SEEDS, filename, label, x, show = False):
     plt.figure(dpi=120)
     plot_arrays(x, curves, 'b', label)
     plt.legend(loc='best')
-    plt.savefig(f'{filename}.png')
+    plt.savefig(f'{filename}.{ext}')
     if show:
         plt.show()
+
+def load_and_plot(filename, ext="pdf"):
+    with open(f'{filename}.csv', 'r') as csv:
+        curves = numpy.loadtxt(csv, delimiter=',')
+        plt.figure(dpi=120)
+        mean = numpy.mean(curves, axis=0)
+        std = numpy.std(curves, axis=0)
+        x = range(len(mean))
+        plt.plot(x, mean, color="b")
+        plt.fill_between(x, mean-std, mean+std, color="b", alpha=0.3)
+        # plt.legend()
+        plt.savefig(f"{filename}.{ext}")
+
+if __name__ == '__main__':
+    import os
+    # traverse root directory, and list directories as dirs and files as files
+    for root, dirs, files in os.walk("./CS885/618be7ee319a4b3b4c91ffea/figures"):
+        for file in files:
+            filename, extension = os.path.splitext(file)
+            if extension == ".csv":
+                load_and_plot(f"{root}/{filename}")
