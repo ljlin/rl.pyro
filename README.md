@@ -1,5 +1,8 @@
 # rl.pyro
 
+[Technical report](https://www.overleaf.com/read/tsjbzzhsmgrh)
+
+Reference
 Name          | URL
 ------------- | -------------
 Pyro          | https://pyro.ai/
